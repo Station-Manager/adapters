@@ -1,13 +1,13 @@
 package adapters
 
 import (
-	"fmt"
 	"github.com/Station-Manager/adapters/converters"
 	sqlmodels "github.com/Station-Manager/database/sqlite/models"
-	"github.com/Station-Manager/types"
+	mytypes "github.com/Station-Manager/types"
+	"github.com/aarondl/sqlboiler/v4/types"
+	"github.com/ericlagergren/decimal"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"strconv"
 	"testing"
 	"time"
 )
@@ -58,8 +58,8 @@ func TestRealworld(T *testing.T) {
 //}
 
 func (suite *TestSuite) TestTypeQsoToModelQsoWithAdditionalData() {
-	qsoType := &types.Qso{
-		QsoDetails: types.QsoDetails{
+	qsoType := &mytypes.Qso{
+		QsoDetails: mytypes.QsoDetails{
 			Band:    "20m",
 			Freq:    "14.320",
 			Mode:    "SSB",
@@ -69,13 +69,13 @@ func (suite *TestSuite) TestTypeQsoToModelQsoWithAdditionalData() {
 			TimeOn:  "1200",
 			TimeOff: "1205",
 		},
-		ContactedStation: types.ContactedStation{
+		ContactedStation: mytypes.ContactedStation{
 			Call:    "M0CMC",
 			Cont:    "EU",
 			Country: "England",
 			Name:    "Marc",
 		},
-		LoggingStation: types.LoggingStation{
+		LoggingStation: mytypes.LoggingStation{
 			MyAltitude:      "1311",
 			MyAntenna:       "Hex Beam",
 			MyCity:          "Mzuzu",
@@ -90,30 +90,37 @@ func (suite *TestSuite) TestTypeQsoToModelQsoWithAdditionalData() {
 	adapter := New()
 	adapter.RegisterConverter("Freq", converters.TypeToModelFreqConverter)
 	adapter.RegisterConverter("QsoDate", converters.TypeToModelDateConverter)
+	adapter.RegisterConverter("TimeOn", converters.TypeToModelTimeConverter)
+	adapter.RegisterConverter("TimeOff", converters.TypeToModelTimeConverter)
 
-	modelDate, err := time.Parse("20060102", qsoType.QsoDate)
-	require.NoError(suite.T(), err)
+	freq := types.NewDecimal(new(decimal.Big))
+	freq.SetFloat64(14.320)
 
-	err = adapter.Adapt(qsoType, model)
+	err := adapter.Adapt(qsoType, model)
 	require.NoError(suite.T(), err)
 	require.Equal(suite.T(), qsoType.Band, model.Band)
-	require.Equal(suite.T(), 14.320, model.Freq)
+
+	// types.Decimal
+	tVal, _ := freq.Float64()
+	mVal, _ := model.Freq.Float64()
+	require.Equal(suite.T(), tVal, mVal)
+
+	// time.Time
+	typeDate, err := time.Parse("20060102", qsoType.QsoDate)
+	require.NoError(suite.T(), err)
+	require.Equal(suite.T(), typeDate, model.QsoDate)
+
+	// strings
 	require.Equal(suite.T(), qsoType.Mode, model.Mode)
-	require.Equal(suite.T(), modelDate, model.QsoDate)
 	require.Equal(suite.T(), qsoType.RstRcvd, model.RstRcvd)
 	require.Equal(suite.T(), qsoType.RstSent, model.RstSent)
-	require.Equal(suite.T(), qsoType.TimeOn, model.TimeOn)
-	require.Equal(suite.T(), qsoType.TimeOff, model.TimeOff)
-}
 
-func typeToModelFreqConverter(src any) (any, error) {
-	srcVal, ok := src.(string)
-	if !ok {
-		return nil, fmt.Errorf("expected string, got %T", src)
-	}
-	freq, err := strconv.ParseFloat(srcVal, 64)
-	if err != nil {
-		return nil, err
-	}
-	return freq, nil
+	// time.Time
+	typeOnTime, err := time.Parse("1504", qsoType.TimeOn)
+	require.NoError(suite.T(), err)
+	typeOffTime, err := time.Parse("1504", qsoType.TimeOff)
+	require.NoError(suite.T(), err)
+
+	require.Equal(suite.T(), typeOnTime, model.TimeOn)
+	require.Equal(suite.T(), typeOffTime, model.TimeOff)
 }
