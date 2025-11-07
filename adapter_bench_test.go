@@ -1,8 +1,8 @@
 package adapters
 
 import (
-	"encoding/json"
 	"fmt"
+	"github.com/goccy/go-json"
 	"testing"
 
 	"github.com/aarondl/null/v8"

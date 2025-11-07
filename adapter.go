@@ -1,8 +1,8 @@
 package adapters
 
 import (
-	"encoding/json"
 	"fmt"
+	"github.com/goccy/go-json"
 	"reflect"
 	"sync"
 
@@ -42,23 +42,23 @@ func (a *Adapter) RegisterConverter(fieldName string, fn ConverterFunc) {
 // 4. Unmarshal src.AdditionalData (null.JSON) to populate dst fields
 //
 // Both src and dst must be pointers to structs.
-func (a *Adapter) Adapt(dst, src interface{}) error {
-	if dst == nil || src == nil {
-		return fmt.Errorf("dst and src must not be nil")
+func (a *Adapter) Adapt(src, dst interface{}) error {
+	if src == nil || dst == nil {
+		return fmt.Errorf("src and dst must not be nil")
 	}
 
-	dstVal := reflect.ValueOf(dst)
 	srcVal := reflect.ValueOf(src)
+	dstVal := reflect.ValueOf(dst)
 
-	if dstVal.Kind() != reflect.Ptr || srcVal.Kind() != reflect.Ptr {
-		return fmt.Errorf("dst and src must be pointers")
+	if srcVal.Kind() != reflect.Ptr || dstVal.Kind() != reflect.Ptr {
+		return fmt.Errorf("src and dst must be pointers")
 	}
 
-	dstVal = dstVal.Elem()
 	srcVal = srcVal.Elem()
+	dstVal = dstVal.Elem()
 
-	if dstVal.Kind() != reflect.Struct || srcVal.Kind() != reflect.Struct {
-		return fmt.Errorf("dst and src must point to structs")
+	if srcVal.Kind() != reflect.Struct || dstVal.Kind() != reflect.Struct {
+		return fmt.Errorf("src and dst must point to structs")
 	}
 
 	return a.adaptStruct(dstVal, srcVal)
