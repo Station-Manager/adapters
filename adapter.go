@@ -121,7 +121,7 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 	if srcAdditionalData.IsValid() {
 		srcAdditionalDataType, found := srcType.FieldByName("AdditionalData")
 		if found && srcAdditionalDataType.Type == reflect.TypeOf(null.JSON{}) {
-			if err := a.unmarshalAdditionalData(dstVal, dstType, srcAdditionalData, dstFieldsSet); err != nil {
+			if err := a.unmarshalAdditionalData(dstVal, srcAdditionalData, dstFieldsSet); err != nil {
 				return fmt.Errorf("unmarshaling AdditionalData: %w", err)
 			}
 			processedSrcFields["AdditionalData"] = true
@@ -190,7 +190,7 @@ func (a *Adapter) adaptField(dstField, srcField reflect.Value, fieldName string)
 }
 
 // unmarshalAdditionalData unmarshals src.AdditionalData to populate dst fields
-func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, dstType reflect.Type, srcAdditionalData reflect.Value, dstFieldsSet map[string]bool) error {
+func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, srcAdditionalData reflect.Value, dstFieldsSet map[string]bool) error {
 	// Get the null.JSON value
 	nullJSON, ok := srcAdditionalData.Interface().(null.JSON)
 	if !ok || !nullJSON.Valid {
