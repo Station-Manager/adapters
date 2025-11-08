@@ -18,8 +18,14 @@ tasks:
       - go vet ./...
       - go build ./...
       - go test -race -run Test ./...
+      - task: clean
       - echo "✓ {{.MODULE_NAME}} module build complete"
 
   prod:
     cmds:
       - task: production:prod
+
+  clean:
+    cmds:
+      - echo "Build artifacts cleaned"
+      - rm -f coverage.*
