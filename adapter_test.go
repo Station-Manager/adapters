@@ -673,3 +673,110 @@ func TestAdapter_ConverterIncompatibleTypeInAdditionalData(t *testing.T) {
 	// Email should be set normally
 	assert.Equal(t, "test@example.com", dst.Email)
 }
+
+// Test structs with embedded fields
+type EmbeddedDetails struct {
+	Phone   string
+	City    string
+	Country string
+}
+
+type SourceWithEmbedded struct {
+	Name string
+	Age  int
+	EmbeddedDetails
+}
+
+type DestWithEmbeddedAdditionalData struct {
+	Name           string
+	Age            int
+	AdditionalData null.JSON
+}
+
+func TestAdapter_EmbeddedFieldsToAdditionalData(t *testing.T) {
+	adapter := New()
+
+	src := &SourceWithEmbedded{
+		Name: "John Smith",
+		Age:  35,
+		EmbeddedDetails: EmbeddedDetails{
+			Phone:   "555-0100",
+			City:    "London",
+			Country: "UK",
+		},
+	}
+
+	dst := &DestWithEmbeddedAdditionalData{}
+
+	err := adapter.Adapt(src, dst)
+	require.NoError(t, err)
+
+	assert.Equal(t, "John Smith", dst.Name)
+	assert.Equal(t, 35, dst.Age)
+
+	// Verify embedded struct fields are in AdditionalData
+	assert.True(t, dst.AdditionalData.Valid)
+
+	var additionalFields map[string]interface{}
+	err = json.Unmarshal(dst.AdditionalData.JSON, &additionalFields)
+	require.NoError(t, err)
+
+	assert.Equal(t, "555-0100", additionalFields["Phone"])
+	assert.Equal(t, "London", additionalFields["City"])
+	assert.Equal(t, "UK", additionalFields["Country"])
+}
+
+// Test multiple embedded structs
+type EmbeddedContact struct {
+	Email string
+	Phone string
+}
+
+type EmbeddedAddress struct {
+	City    string
+	Country string
+}
+
+type SourceWithMultipleEmbedded struct {
+	Name string
+	Age  int
+	EmbeddedContact
+	EmbeddedAddress
+}
+
+func TestAdapter_MultipleEmbeddedFieldsToAdditionalData(t *testing.T) {
+	adapter := New()
+
+	src := &SourceWithMultipleEmbedded{
+		Name: "Jane Doe",
+		Age:  28,
+		EmbeddedContact: EmbeddedContact{
+			Email: "jane@example.com",
+			Phone: "555-0200",
+		},
+		EmbeddedAddress: EmbeddedAddress{
+			City:    "Paris",
+			Country: "France",
+		},
+	}
+
+	dst := &DestWithEmbeddedAdditionalData{}
+
+	err := adapter.Adapt(src, dst)
+	require.NoError(t, err)
+
+	assert.Equal(t, "Jane Doe", dst.Name)
+	assert.Equal(t, 28, dst.Age)
+
+	// Verify all embedded struct fields are in AdditionalData
+	assert.True(t, dst.AdditionalData.Valid)
+
+	var additionalFields map[string]interface{}
+	err = json.Unmarshal(dst.AdditionalData.JSON, &additionalFields)
+	require.NoError(t, err)
+
+	assert.Equal(t, "jane@example.com", additionalFields["Email"])
+	assert.Equal(t, "555-0200", additionalFields["Phone"])
+	assert.Equal(t, "Paris", additionalFields["City"])
+	assert.Equal(t, "France", additionalFields["Country"])
+}

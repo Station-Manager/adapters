@@ -133,26 +133,9 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 	if dstAdditionalData.IsValid() && dstAdditionalData.CanSet() {
 		dstAdditionalDataType, found := dstType.FieldByName("AdditionalData")
 		if found && dstAdditionalDataType.Type == reflect.TypeOf(null.JSON{}) {
-			// Check if all destination fields (except AdditionalData) have been set
-			allDstFieldsSet := true
-			for i := 0; i < dstType.NumField(); i++ {
-				dstFieldType := dstType.Field(i)
-				if !dstVal.Field(i).CanSet() {
-					continue
-				}
-				if dstFieldType.Name == "AdditionalData" {
-					continue
-				}
-				if !dstFieldsSet[dstFieldType.Name] {
-					allDstFieldsSet = false
-					break
-				}
-			}
-
-			if allDstFieldsSet {
-				if err := a.marshalRemainingFields(dstAdditionalData, srcVal, srcType, processedSrcFields); err != nil {
-					return fmt.Errorf("marshaling remaining fields to AdditionalData: %w", err)
-				}
+			// Marshal any remaining unprocessed source fields to AdditionalData
+			if err := a.marshalRemainingFields(dstAdditionalData, srcVal, srcType, processedSrcFields); err != nil {
+				return fmt.Errorf("marshaling remaining fields to AdditionalData: %w", err)
 			}
 		}
 	}
@@ -276,27 +259,8 @@ func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, dstType reflect.
 func (a *Adapter) marshalRemainingFields(dstAdditionalData reflect.Value, srcVal reflect.Value, srcType reflect.Type, processedSrcFields map[string]bool) error {
 	remainingFields := make(map[string]interface{})
 
-	for i := 0; i < srcType.NumField(); i++ {
-		srcFieldType := srcType.Field(i)
-		srcField := srcVal.Field(i)
-
-		// Skip unexported fields
-		if !srcField.CanInterface() {
-			continue
-		}
-
-		// Skip if already processed
-		if processedSrcFields[srcFieldType.Name] {
-			continue
-		}
-
-		// Skip AdditionalData field
-		if srcFieldType.Name == "AdditionalData" {
-			continue
-		}
-
-		remainingFields[srcFieldType.Name] = srcField.Interface()
-	}
+	// Collect all fields including those from embedded structs
+	a.collectRemainingFields(srcVal, srcType, processedSrcFields, remainingFields)
 
 	// If there are no remaining fields, set AdditionalData to null
 	if len(remainingFields) == 0 {
@@ -315,4 +279,35 @@ func (a *Adapter) marshalRemainingFields(dstAdditionalData reflect.Value, srcVal
 	dstAdditionalData.Set(reflect.ValueOf(nullJSON))
 
 	return nil
+}
+
+// collectRemainingFields recursively collects fields from structs including embedded structs
+func (a *Adapter) collectRemainingFields(srcVal reflect.Value, srcType reflect.Type, processedSrcFields map[string]bool, remainingFields map[string]interface{}) {
+	for i := 0; i < srcType.NumField(); i++ {
+		srcFieldType := srcType.Field(i)
+		srcField := srcVal.Field(i)
+
+		// Skip unexported fields
+		if !srcField.CanInterface() {
+			continue
+		}
+
+		// Skip AdditionalData field
+		if srcFieldType.Name == "AdditionalData" {
+			continue
+		}
+
+		// If this is an embedded struct, recurse into it
+		if srcFieldType.Anonymous && srcField.Kind() == reflect.Struct {
+			a.collectRemainingFields(srcField, srcField.Type(), processedSrcFields, remainingFields)
+			continue
+		}
+
+		// Skip if already processed
+		if processedSrcFields[srcFieldType.Name] {
+			continue
+		}
+
+		remainingFields[srcFieldType.Name] = srcField.Interface()
+	}
 }
