@@ -1,6 +1,7 @@
-package converters
+package postgres
 
 import (
+	"github.com/Station-Manager/adapters/converters"
 	"github.com/Station-Manager/errors"
 	"github.com/aarondl/sqlboiler/v4/types"
 	"github.com/ericlagergren/decimal"
@@ -11,8 +12,8 @@ import (
 // It returns types.Decimal the underlying value is a decimal.Big and is retrieved as a float64.
 // Both sqlite3 and postgres have the same type for frequencies, which are set by SQLBoiler.
 func TypeToModelFreqConverter(src any) (any, error) {
-	const op errors.Op = "converters.TypeToModelFreqConverter"
-	srcVal, err := checkString(src)
+	const op errors.Op = "converters.postgres.TypeToModelFreqConverter"
+	srcVal, err := converters.CheckString(src)
 	if err != nil {
 		return 0, errors.New(op).Err(err)
 	}

@@ -1,7 +1,7 @@
 package converters
 
 const (
-	errMsgFreqParamEmpty = "Frequency parameter cannot be empty."
-	enrMsgBadDateLength  = "Date must be in YYYYMMDD format"
-	errMsgBadTimeLength  = "Time must be in HHMM format"
+	ErrMsgFreqParamEmpty = "Frequency parameter cannot be empty."
+	ErrMsgBadTimeFormat  = "Bad time format, expected HH:MM or HHMM"
+	ErrMsgBadDateFormat  = "Bad date format, expected YYYYMMDD or YYYY-MM-DD"
 )
