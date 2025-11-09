@@ -8,7 +8,7 @@ import (
 
 func TypeToModelCountryConverter(src any) (any, error) {
 	const op errors.Op = "converters.sqlite.TypeToModelCountryConverter"
-	srcVal, err := converters.CheckString(src)
+	srcVal, err := converters.CheckString(op, src)
 	if err != nil {
 		return null.String{}, errors.New(op).Err(err)
 	}
@@ -34,7 +34,7 @@ func ModelToTypeCountryConverter(src any) (any, error) {
 	}
 
 	// Fallback to string check
-	srcVal, err := converters.CheckString(src)
+	srcVal, err := converters.CheckString(op, src)
 	if err != nil {
 		return "", errors.New(op).Err(err)
 	}

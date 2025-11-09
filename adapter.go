@@ -132,6 +132,12 @@ func (a *Adapter) getOrBuildMetadata(typ reflect.Type) *structMetadata {
 	// Build field metadata, handling embedded structs
 	a.buildFieldMetadata(typ, meta, nil)
 
+	// Build fieldsByName map AFTER all fields are added to prevent stale pointers
+	// (slice may have reallocated during buildFieldMetadata)
+	for i := range meta.fields {
+		meta.fieldsByName[meta.fields[i].name] = &meta.fields[i]
+	}
+
 	// Cache AdditionalData field lookup if it exists
 	if adField, ok := meta.fieldsByName["AdditionalData"]; ok && adField.isAdditionalData {
 		meta.additionalDataField = adField
@@ -151,9 +157,17 @@ func (a *Adapter) buildFieldMetadata(typ reflect.Type, meta *structMetadata, ind
 		fieldIndex := append(append([]int(nil), indexPrefix...), i)
 
 		// Handle embedded structs - recurse into them
-		if field.Anonymous && field.Type.Kind() == reflect.Struct {
-			a.buildFieldMetadata(field.Type, meta, fieldIndex)
-			continue
+		// Support both direct embedded structs and pointer-to-struct embedded fields
+		if field.Anonymous {
+			fieldType := field.Type
+			// Dereference pointer if it's a pointer-to-struct
+			if fieldType.Kind() == reflect.Ptr {
+				fieldType = fieldType.Elem()
+			}
+			if fieldType.Kind() == reflect.Struct {
+				a.buildFieldMetadata(fieldType, meta, fieldIndex)
+				continue
+			}
 		}
 
 		// Skip unexported fields
@@ -169,7 +183,6 @@ func (a *Adapter) buildFieldMetadata(typ reflect.Type, meta *structMetadata, ind
 			isAdditionalData: field.Name == "AdditionalData" && field.Type == reflect.TypeOf(null.JSON{}),
 		}
 		meta.fields = append(meta.fields, info)
-		meta.fieldsByName[field.Name] = &meta.fields[len(meta.fields)-1]
 	}
 }
 
@@ -216,7 +229,9 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 
 		// Skip source AdditionalData if not null.JSON
 		if srcFieldInfo.isAdditionalData {
-			processedSrcFields[srcFieldInfo.name] = true
+			if hasAdditionalDataProcessing {
+				processedSrcFields[srcFieldInfo.name] = true
+			}
 			continue
 		}
 
@@ -260,6 +275,11 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 
 // adaptField copies or converts a single field value
 func (a *Adapter) adaptField(dstField, srcField reflect.Value, fieldName string) error {
+	// Check if destination field can be set
+	if !dstField.CanSet() {
+		return fmt.Errorf("cannot set field %s (unexported or unsettable)", fieldName)
+	}
+
 	srcType := srcField.Type()
 	dstType := dstField.Type()
 
@@ -273,7 +293,16 @@ func (a *Adapter) adaptField(dstField, srcField reflect.Value, fieldName string)
 		if err != nil {
 			return err
 		}
+		// Handle nil converter result
+		if converted == nil {
+			// Set zero value for destination type
+			dstField.Set(reflect.Zero(dstType))
+			return nil
+		}
 		convertedVal := reflect.ValueOf(converted)
+		if !convertedVal.IsValid() {
+			return fmt.Errorf("converter returned invalid value for field %s", fieldName)
+		}
 		if !convertedVal.Type().AssignableTo(dstType) {
 			return fmt.Errorf("converter returned type %s, expected %s", convertedVal.Type(), dstType)
 		}
@@ -350,7 +379,16 @@ func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, srcAdditionalDat
 			if err != nil {
 				continue // Skip on conversion error
 			}
+			// Handle nil converter result
+			if converted == nil {
+				dstField.Set(reflect.Zero(dstField.Type()))
+				dstFieldsSet[fieldName] = true
+				continue
+			}
 			convertedVal := reflect.ValueOf(converted)
+			if !convertedVal.IsValid() {
+				continue // Skip invalid values
+			}
 			if convertedVal.Type().AssignableTo(dstField.Type()) {
 				dstField.Set(convertedVal)
 				dstFieldsSet[fieldName] = true
@@ -413,9 +451,22 @@ func (a *Adapter) collectRemainingFields(srcVal reflect.Value, srcType reflect.T
 		}
 
 		// If this is an embedded struct, recurse into it
-		if srcFieldType.Anonymous && srcField.Kind() == reflect.Struct {
-			a.collectRemainingFields(srcField, srcField.Type(), processedSrcFields, remainingFields)
-			continue
+		// Support both direct embedded structs and pointer-to-struct embedded fields
+		if srcFieldType.Anonymous {
+			fieldVal := srcField
+			fieldType := srcField.Type()
+			// Dereference pointer if it's a pointer-to-struct
+			if fieldVal.Kind() == reflect.Ptr {
+				if fieldVal.IsNil() {
+					continue // Skip nil pointers
+				}
+				fieldVal = fieldVal.Elem()
+				fieldType = fieldVal.Type()
+			}
+			if fieldVal.Kind() == reflect.Struct {
+				a.collectRemainingFields(fieldVal, fieldType, processedSrcFields, remainingFields)
+				continue
+			}
 		}
 
 		// Skip if already processed

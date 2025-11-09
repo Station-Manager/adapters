@@ -12,7 +12,7 @@ import (
 // Returns the converted frequency or an error if the source is invalid or conversion fails.
 func TypeToModelFreqConverter(src any) (any, error) {
 	const op errors.Op = "converters.sqlite.TypeToModelFreqConverter"
-	srcVal, err := converters.CheckString(src)
+	srcVal, err := converters.CheckString(op, src)
 	if err != nil {
 		return 0, errors.New(op).Err(err)
 	}
@@ -28,7 +28,7 @@ func TypeToModelFreqConverter(src any) (any, error) {
 // Returns the converted string and an error if the input is not valid.
 func ModelToTypeFreqConverter(src any) (any, error) {
 	const op errors.Op = "converters.sqlite.ModelToTypeFreqConverter"
-	srcVal, err := converters.CheckInt64(src)
+	srcVal, err := converters.CheckInt64(op, src)
 	if err != nil {
 		return "", errors.New(op).Err(err)
 	}

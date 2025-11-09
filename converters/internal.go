@@ -4,8 +4,7 @@ import (
 	"github.com/Station-Manager/errors"
 )
 
-func CheckString(src any) (string, error) {
-	const op errors.Op = "converters.CheckString"
+func CheckString(op errors.Op, src any) (string, error) {
 	srcVal, ok := src.(string)
 	if !ok {
 		return "", errors.New(op).Errorf("Given parameter not a string, got %T", src)
@@ -28,8 +27,7 @@ func CheckFloat64(src any) (float64, error) {
 	return srcVal, nil
 }
 
-func CheckInt64(src any) (int64, error) {
-	const op errors.Op = "converters.CheckInt64"
+func CheckInt64(op errors.Op, src any) (int64, error) {
 	srcVal, ok := src.(int64)
 	if !ok {
 		return -1, errors.New(op).Errorf("Given parameter not a int64, got %T", src)

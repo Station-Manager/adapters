@@ -8,7 +8,7 @@ import (
 
 func TypeToModelDateConverter(src any) (any, error) {
 	const op errors.Op = "converters.sqlite.TypeToModelDateConverter"
-	srcVal, err := converters.CheckString(src)
+	srcVal, err := converters.CheckString(op, src)
 	if err != nil {
 		return "", errors.New(op).Err(err)
 	}
@@ -38,7 +38,7 @@ func TypeToModelDateConverter(src any) (any, error) {
 
 func TypeToModelTimeConverter(src any) (any, error) {
 	const op errors.Op = "converters.sqlite.TypeToModelTimeConverter"
-	srsVal, err := converters.CheckString(src)
+	srsVal, err := converters.CheckString(op, src)
 	if err != nil {
 		return nil, errors.New(op).Err(err)
 	}
@@ -66,7 +66,7 @@ func TypeToModelTimeConverter(src any) (any, error) {
 
 func ModelToTypeDateConverter(src any) (any, error) {
 	const op errors.Op = "converters.sqlite.ModelToTypeDateConverter"
-	srcVal, err := converters.CheckString(src)
+	srcVal, err := converters.CheckString(op, src)
 	if err != nil {
 		return "", errors.New(op).Err(err)
 	}

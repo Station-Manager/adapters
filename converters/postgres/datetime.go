@@ -8,7 +8,7 @@ import (
 
 func TypeToModelDateConverter(src any) (any, error) {
 	const op errors.Op = "converters.postgres.TypeToModelDateConverter"
-	srcVal, err := converters.CheckString(src)
+	srcVal, err := converters.CheckString(op, src)
 	if err != nil {
 		return "", errors.New(op).Err(err)
 	}
@@ -38,7 +38,7 @@ func TypeToModelDateConverter(src any) (any, error) {
 
 func TypeToModelTimeConverter(src any) (any, error) {
 	const op errors.Op = "converters.postgres.TypeToModelTimeConverter"
-	srsVal, err := converters.CheckString(src)
+	srsVal, err := converters.CheckString(op, src)
 	if err != nil {
 		return nil, errors.New(op).Err(err)
 	}
