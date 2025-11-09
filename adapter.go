@@ -75,7 +75,7 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 	// Track which destination fields have been set
 	dstFieldsSet := make(map[string]bool)
 
-	// Step 1 & 2: Copy fields with same name (with or without conversion)
+	// Step 1 & 2: Copy fields with the same name (with or without conversion)
 	for i := 0; i < dstType.NumField(); i++ {
 		dstField := dstVal.Field(i)
 		dstFieldType := dstType.Field(i)
@@ -85,17 +85,18 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 			continue
 		}
 
-		// Skip AdditionalData field in first pass
+		// Skip AdditionalData field in the first pass
 		if dstFieldType.Name == "AdditionalData" {
 			continue
 		}
 
-		// Find matching source field by name
+		// Find a matching source field by name
 		srcField := srcVal.FieldByName(dstFieldType.Name)
 		if !srcField.IsValid() {
 			continue
 		}
 
+		// Check if the source and destination fields have the same type
 		srcFieldType, found := srcType.FieldByName(dstFieldType.Name)
 		if !found {
 			continue

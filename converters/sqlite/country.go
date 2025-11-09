@@ -21,3 +21,23 @@ func TypeToModelCountryConverter(src any) (any, error) {
 	// Return valid null.String
 	return null.StringFrom(srcVal), nil
 }
+
+func ModelToTypeCountryConverter(src any) (any, error) {
+	const op errors.Op = "converters.sqlite.ModelToTypeCountryConverter"
+
+	// Handle null.String type from SQLite model
+	if nullStr, ok := src.(null.String); ok {
+		if !nullStr.Valid {
+			return "", nil
+		}
+		return nullStr.String, nil
+	}
+
+	// Fallback to string check
+	srcVal, err := converters.CheckString(src)
+	if err != nil {
+		return "", errors.New(op).Err(err)
+	}
+
+	return srcVal, nil
+}

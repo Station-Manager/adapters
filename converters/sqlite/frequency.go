@@ -18,3 +18,13 @@ func TypeToModelFreqConverter(src any) (any, error) {
 	}
 	return retVal, nil
 }
+
+func ModelToTypeFreqConverter(src any) (any, error) {
+	const op errors.Op = "converters.sqlite.ModelToTypeFreqConverter"
+	srcVal, err := converters.CheckFloat64(src)
+	if err != nil {
+		return "", errors.New(op).Err(err)
+	}
+	retVal := strconv.FormatFloat(srcVal, 'f', -1, 64)
+	return retVal, nil
+}
