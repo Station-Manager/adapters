@@ -420,13 +420,14 @@ func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, dstMeta *structM
 		converter, exists := converters[fieldName]
 
 		if exists {
-			// Unmarshal to interface{} first to preserve JSON types (e.g. float64 for numbers)
+			// Unmarshal to interface{} to preserve JSON types (e.g. float64 for numbers)
 			var rawVal interface{}
 			if err := json.Unmarshal(rawValue, &rawVal); err != nil {
 				continue // Skip fields that can't be unmarshaled
 			}
 
-			// Apply converter
+			// Apply converter - converter is responsible for handling type conversions
+			// Note: converters receive JSON-native types (numbers as float64)
 			converted, err := converter(rawVal)
 			if err != nil {
 				continue // Skip on conversion error
