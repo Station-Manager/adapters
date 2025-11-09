@@ -2,6 +2,7 @@ package converters
 
 import (
 	"github.com/Station-Manager/errors"
+	"math"
 )
 
 func CheckString(op errors.Op, src any) (string, error) {
@@ -15,8 +16,7 @@ func CheckString(op errors.Op, src any) (string, error) {
 	return srcVal, nil
 }
 
-func CheckFloat64(src any) (float64, error) {
-	const op errors.Op = "converters.CheckFloat64"
+func CheckFloat64(op errors.Op, src any) (float64, error) {
 	srcVal, ok := src.(float64)
 	if !ok {
 		return 0, errors.New(op).Errorf("Given parameter not a float64, got %T", src)
@@ -28,9 +28,37 @@ func CheckFloat64(src any) (float64, error) {
 }
 
 func CheckInt64(op errors.Op, src any) (int64, error) {
-	srcVal, ok := src.(int64)
-	if !ok {
-		return -1, errors.New(op).Errorf("Given parameter not a int64, got %T", src)
+	// Accept multiple numeric representations that may come from JSON unmarshalling:
+	// - int, intX, uintX
+	// - float64 (JSON default for numbers) when it is an integer value
+	switch v := src.(type) {
+	case int64:
+		return v, nil
+	case int:
+		return int64(v), nil
+	case int32:
+		return int64(v), nil
+	case int16:
+		return int64(v), nil
+	case int8:
+		return int64(v), nil
+	case uint:
+		return int64(v), nil
+	case uint64:
+		return int64(v), nil
+	case uint32:
+		return int64(v), nil
+	case uint16:
+		return int64(v), nil
+	case uint8:
+		return int64(v), nil
+	case float64:
+		// JSON numbers are float64; accept if it's an integer value.
+		if math.Trunc(v) != v {
+			return -1, errors.New(op).Errorf("Given float64 not an integer, got %v", v)
+		}
+		return int64(v), nil
+	default:
+		return -1, errors.New(op).Errorf("Given parameter not an integer, got %T", src)
 	}
-	return srcVal, nil
 }
