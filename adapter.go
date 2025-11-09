@@ -44,8 +44,8 @@ func New() *Adapter {
 	a.converters.Store(make(map[string]ConverterFunc))
 	a.boolMapPool = sync.Pool{
 		New: func() interface{} {
-			// Default capacity for pool - will be cleared and sized appropriately on first use
-			return make(map[string]bool)
+			// Return nil so getBoolMap can distinguish between fresh and reused maps
+			return (map[string]bool)(nil)
 		},
 	}
 	return a
@@ -101,11 +101,9 @@ func (a *Adapter) Adapt(src, dst interface{}) error {
 func (a *Adapter) getBoolMap(desiredCapacity int) map[string]bool {
 	pooledMap := a.boolMapPool.Get().(map[string]bool)
 
-	// If this is a fresh/empty map from the pool, allocate with proper capacity
-	// After first use, maps are returned to pool already sized and will be reused as-is
-	if len(pooledMap) == 0 {
-		// Check if it's truly empty or just cleared - use a marker approach
-		// For simplicity, just allocate on empty and let pool warm up naturally
+	// If this is a nil map from the pool (brand new from sync.Pool.New),
+	// allocate with proper capacity
+	if pooledMap == nil {
 		return make(map[string]bool, desiredCapacity)
 	}
 
@@ -303,7 +301,7 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 	// Step 4: Unmarshal src.AdditionalData (null.JSON) to populate dst fields
 	if srcMeta.additionalDataField != nil {
 		srcAdditionalData := srcVal.FieldByIndex(srcMeta.additionalDataField.index)
-		if err := a.unmarshalAdditionalData(dstVal, srcAdditionalData, dstFieldsSet); err != nil {
+		if err := a.unmarshalAdditionalData(dstVal, dstMeta, srcAdditionalData, dstFieldsSet); err != nil {
 			return fmt.Errorf("unmarshaling AdditionalData: %w", err)
 		}
 		if hasAdditionalDataProcessing {
@@ -383,7 +381,7 @@ func (a *Adapter) adaptField(dstField, srcField reflect.Value, fieldName string)
 }
 
 // unmarshalAdditionalData unmarshals src.AdditionalData to populate dst fields
-func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, srcAdditionalData reflect.Value, dstFieldsSet map[string]bool) error {
+func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, dstMeta *structMetadata, srcAdditionalData reflect.Value, dstFieldsSet map[string]bool) error {
 	// Get the null.JSON value
 	nullJSON, ok := srcAdditionalData.Interface().(null.JSON)
 	if !ok || !nullJSON.Valid {
@@ -409,10 +407,14 @@ func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, srcAdditionalDat
 			continue
 		}
 
-		dstField := dstVal.FieldByName(fieldName)
-		if !dstField.IsValid() || !dstField.CanSet() {
-			continue
+		// Look up field in metadata (fast map lookup)
+		dstFieldInfo, found := dstMeta.fieldsByName[fieldName]
+		if !found || !dstFieldInfo.canSet {
+			continue // Field doesn't exist or isn't settable
 		}
+
+		// Use cached index for fast field access
+		dstField := dstVal.FieldByIndex(dstFieldInfo.index)
 
 		// Check if converter exists for this field - CHANGED
 		converter, exists := converters[fieldName]
