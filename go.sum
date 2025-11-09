@@ -1,7 +1,7 @@
 github.com/DATA-DOG/go-sqlmock v1.4.1 h1:ThlnYciV1iM/V0OSF/dtkqWb6xo5qITT1TJBG1MRDJM=
 github.com/DATA-DOG/go-sqlmock v1.4.1/go.mod h1:f/Ixk793poVmq4qj/V1dPUg2JEAKC73Q5eFN3EC/SaM=
-github.com/Station-Manager/database v0.0.6 h1:ZqV94oME2dB7Fd5YuacYYDc7biqS5tS2vIcbaqIp/B4=
-github.com/Station-Manager/database v0.0.6/go.mod h1:KxCmoIkhko5pZXeCW4oERpx+PBgwCQhKAHMTFikxwlg=
+github.com/Station-Manager/database v0.0.7 h1:5KR+ZMkNIxiUJYmXMrJJXqg+sTHLYhYmePT7SKOwZ0o=
+github.com/Station-Manager/database v0.0.7/go.mod h1:y/wGc69JAXYBr5fLFZ3vmim7XMVf3RdWD6ufF7voTtw=
 github.com/Station-Manager/errors v0.0.2 h1:9ZvPB+aayZiL4NY+iNIMGcg4YQv3tKxfZkb1+Bv6jF4=
 github.com/Station-Manager/errors v0.0.2/go.mod h1:yedsGkIKLyDEUhkm7VrjwE2Qq6Jdlq0MpwEjdDhBwh0=
 github.com/Station-Manager/types v0.0.6 h1:rHMIKA/9S/dFtrofK36etZbnw0ErI1ry8JqsEtVrsC4=
@@ -31,8 +31,11 @@ github.com/gofrs/uuid v4.4.0+incompatible h1:3qXRTX8/NbyulANqlc0lchS1gqAVxRgsuW1
 github.com/gofrs/uuid v4.4.0+incompatible/go.mod h1:b2aQJv3Z4Fp6yNu3cdSllBxTCLRxnplIgP/c0N/04lM=
 github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
 github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
+github.com/kr/pretty v0.2.1/go.mod h1:ipq/a2n7PKx3OHsz4KJII5eveXtPO4qwEXGdVfWzfnI=
 github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=
 github.com/kr/pretty v0.3.1/go.mod h1:hoEshYVHaxMs3cyo3Yncou5ZscifuDolrwPKZanG3xk=
+github.com/kr/pty v1.1.1/go.mod h1:pFQYn66WHrOpPYNljwOMqo10TkYh1fy3cYio2l3bCsQ=
+github.com/kr/text v0.1.0/go.mod h1:4Jbv+DJW3UT/LiOwJeYQe1efqtUx/iVham/4vfdArNI=
 github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
 github.com/kr/text v0.2.0/go.mod h1:eLer722TekiGuMkidMxC/pM04lWEeraHUUmBw8l2grE=
 github.com/lib/pq v1.10.9 h1:YXG7RB+JIjhP29X+OtkiDnYaXQwpS4JEWq7dtCCRUEw=

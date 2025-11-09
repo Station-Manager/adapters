@@ -7,7 +7,7 @@ import (
 )
 
 func TypeToModelCountryConverter(src any) (any, error) {
-	const op errors.Op = "converters.sqlite.TypeToModelCountryConverter"
+	const op errors.Op = "converters.common.TypeToModelCountryConverter"
 	srcVal, err := converters.CheckString(op, src)
 	if err != nil {
 		return null.String{}, errors.New(op).Err(err)
@@ -23,7 +23,7 @@ func TypeToModelCountryConverter(src any) (any, error) {
 }
 
 func ModelToTypeCountryConverter(src any) (any, error) {
-	const op errors.Op = "converters.sqlite.ModelToTypeCountryConverter"
+	const op errors.Op = "converters.common.ModelToTypeCountryConverter"
 
 	// Handle null.String type from SQLite model
 	if nullStr, ok := src.(null.String); ok {

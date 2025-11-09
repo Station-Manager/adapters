@@ -1,4 +1,4 @@
-package sqlite
+package common
 
 import (
 	"github.com/Station-Manager/adapters/converters"
@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+// TypeToModelDateConverter converts a date value from a string to a time.Time.
+// The source value is expected to be a string representation of a date in YYYYMMDD or YYYY-MM-DD format.
+// Returns the converted date or an error if the source is invalid or conversion fails.
+//
+// This is a common converter that can be used by both sqlite3 and postgres databases but
+// is dependent on both databases storing the time as a time.Time.
 func TypeToModelDateConverter(src any) (any, error) {
 	const op errors.Op = "converters.sqlite.TypeToModelDateConverter"
 	srcVal, err := converters.CheckString(op, src)
@@ -33,9 +39,15 @@ func TypeToModelDateConverter(src any) (any, error) {
 	if err != nil {
 		return "", errors.New(op).Err(err).Msg(converters.ErrMsgBadDateFormat)
 	}
-	return retVal.Format("20060102"), nil
+	return retVal, nil
 }
 
+// TypeToModelTimeConverter converts a time ( value from a string to a time.Time.
+// The source value is expected to be a string representation of a date in YYYYMMDD or YYYY-MM-DD format.
+// Returns the converted date or an error if the source is invalid or conversion fails.
+//
+// This is a common converter that can be used by both sqlite3 and postgres databases but
+// is dependent on both databases storing the date as a time.Time.
 func TypeToModelTimeConverter(src any) (any, error) {
 	const op errors.Op = "converters.sqlite.TypeToModelTimeConverter"
 	srsVal, err := converters.CheckString(op, src)
@@ -61,7 +73,7 @@ func TypeToModelTimeConverter(src any) (any, error) {
 		return nil, errors.New(op).Msg(converters.ErrMsgBadTimeFormat)
 	}
 
-	return retVal.Format("1504"), nil
+	return retVal, nil
 }
 
 func ModelToTypeDateConverter(src any) (any, error) {

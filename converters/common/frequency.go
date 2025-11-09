@@ -1,4 +1,4 @@
-package sqlite
+package common
 
 import (
 	"github.com/Station-Manager/adapters/converters"
@@ -7,11 +7,14 @@ import (
 	"strconv"
 )
 
-// TypeToModelFreqConverter converts a string source value into a float64 representation of frequency.
+// TypeToModelFreqConverter converts a frequency value from a string to an int64.
 // The source value is expected to be a string representation of a frequency in MHz.
-// Returns the converted frequency or an error if the source is invalid or conversion fails.
+// Returns the converted frequency (in Hz) or an error if the source is invalid or conversion fails.
+//
+// This is a common converter that can be used by both sqlite3 and postgres databases but
+// is dependent on both databases storing the frequency as an int64.
 func TypeToModelFreqConverter(src any) (any, error) {
-	const op errors.Op = "converters.sqlite.TypeToModelFreqConverter"
+	const op errors.Op = "converters.common.TypeToModelFreqConverter"
 	srcVal, err := converters.CheckString(op, src)
 	if err != nil {
 		return 0, errors.New(op).Err(err)
@@ -26,8 +29,11 @@ func TypeToModelFreqConverter(src any) (any, error) {
 
 // ModelToTypeFreqConverter converts an int64 frequency in Hz to a string representing frequency in MHz with 3 decimal places.
 // Returns the converted string and an error if the input is not valid.
+//
+// This is a common converter that can be used by both sqlite3 and postgres databases but
+// is dependent on both databases storing the frequency as an int64.
 func ModelToTypeFreqConverter(src any) (any, error) {
-	const op errors.Op = "converters.sqlite.ModelToTypeFreqConverter"
+	const op errors.Op = "converters.common.ModelToTypeFreqConverter"
 	srcVal, err := converters.CheckInt64(op, src)
 	if err != nil {
 		return "", errors.New(op).Err(err)
