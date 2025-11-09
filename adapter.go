@@ -14,7 +14,7 @@ import (
 type ConverterFunc func(src interface{}) (interface{}, error)
 
 type fieldInfo struct {
-	index            int
+	index            []int
 	name             string
 	typ              reflect.Type
 	canSet           bool
@@ -50,9 +50,9 @@ func (a *Adapter) RegisterConverter(fieldName string, fn ConverterFunc) {
 }
 
 // Adapt copies and converts fields from src to dst according to the adaptation rules:
-// 1. Copy fields with same name and type directly
-// 2. Copy and convert fields with same name using registered converter
-// 3. Marshal remaining source fields to dst.AdditionalData (null.JSON) if present
+// 1. Copy fields with the same name and type directly
+// 2. Copy and convert fields with the same name using a registered converter.
+// 3. Marshal remaining source fields to dst.AdditionalData (null.JSON), if present.
 // 4. Unmarshal src.AdditionalData (null.JSON) to populate dst fields
 //
 // Both src and dst must be pointers to structs.
@@ -89,22 +89,43 @@ func (a *Adapter) getOrBuildMetadata(typ reflect.Type) *structMetadata {
 		fieldsByName: make(map[string]*fieldInfo, typ.NumField()),
 	}
 
+	// Build field metadata, handling embedded structs
+	a.buildFieldMetadata(typ, meta, nil)
+
+	// Store and return (handle race condition gracefully)
+	actual, _ := a.metadataCache.LoadOrStore(typ, meta)
+	return actual.(*structMetadata)
+}
+
+// buildFieldMetadata recursively builds field metadata including embedded structs
+func (a *Adapter) buildFieldMetadata(typ reflect.Type, meta *structMetadata, indexPrefix []int) {
 	for i := 0; i < typ.NumField(); i++ {
 		field := typ.Field(i)
+
+		// Build index path (for nested access)
+		fieldIndex := append(append([]int(nil), indexPrefix...), i)
+
+		// Handle embedded structs - recurse into them
+		if field.Anonymous && field.Type.Kind() == reflect.Struct {
+			a.buildFieldMetadata(field.Type, meta, fieldIndex)
+			continue
+		}
+
+		// Skip unexported fields
+		if field.PkgPath != "" {
+			continue
+		}
+
 		info := fieldInfo{
-			index:            i,
+			index:            fieldIndex,
 			name:             field.Name,
 			typ:              field.Type,
-			canSet:           field.PkgPath == "", // exported field
+			canSet:           true, // already checked it's exported
 			isAdditionalData: field.Name == "AdditionalData" && field.Type == reflect.TypeOf(null.JSON{}),
 		}
 		meta.fields = append(meta.fields, info)
 		meta.fieldsByName[field.Name] = &meta.fields[len(meta.fields)-1]
 	}
-
-	// Store and return (handle race condition gracefully)
-	actual, _ := a.metadataCache.LoadOrStore(typ, meta)
-	return actual.(*structMetadata)
 }
 
 // adaptStruct performs the struct-to-struct adaptation
@@ -142,8 +163,8 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 		}
 
 		// Get field values by index (faster than FieldByName)
-		dstField := dstVal.Field(dstFieldInfo.index)
-		srcField := srcVal.Field(srcFieldInfo.index)
+		dstField := dstVal.FieldByIndex(dstFieldInfo.index)
+		srcField := srcVal.FieldByIndex(srcFieldInfo.index)
 
 		// Try to copy/convert the field
 		if err := a.adaptField(dstField, srcField, dstFieldInfo.name); err != nil {
