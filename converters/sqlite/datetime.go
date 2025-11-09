@@ -25,8 +25,11 @@ func TypeToModelDateConverter(src any) (any, error) {
 		// Try YYYY-MM-DD format
 		if srcVal[4] == '-' && srcVal[7] == '-' {
 			retVal, err = time.Parse("2006-01-02", srcVal)
+			if err != nil {
+				return "", errors.New(op).Err(err).Msg(converters.ErrMsgBadDateFormat)
+			}
 		} else {
-			err = errors.New(op).Msg(converters.ErrMsgBadDateFormat)
+			return "", errors.New(op).Msg(converters.ErrMsgBadDateFormat)
 		}
 	case 8:
 		retVal, err = time.Parse("20060102", srcVal)
