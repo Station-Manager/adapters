@@ -44,7 +44,8 @@ func New() *Adapter {
 	a.converters.Store(make(map[string]ConverterFunc))
 	a.boolMapPool = sync.Pool{
 		New: func() interface{} {
-			return make(map[string]bool, 80) // Pre-size for QSO: ~73 fields in types.Qso, ~60-65 go to AdditionalData
+			// Default capacity for pool - will be cleared and sized appropriately on first use
+			return make(map[string]bool)
 		},
 	}
 	return a
@@ -67,10 +68,10 @@ func (a *Adapter) RegisterConverter(fieldName string, fn ConverterFunc) {
 }
 
 // Adapt copies and converts fields from src to dst according to the adaptation rules:
-// 1. Copy fields with the same name and type directly
-// 2. Copy and convert fields with the same name using a registered converter.
-// 3. Marshal remaining source fields to dst.AdditionalData (null.JSON), if present.
-// 4. Unmarshal src.AdditionalData (null.JSON) to populate dst fields
+//  1. Copy fields with the same name and type directly
+//  2. Copy and convert fields with the same name using a registered converter.
+//  3. Marshal remaining source fields to dst.AdditionalData (null.JSON), if present.
+//  4. Unmarshal src.AdditionalData (null.JSON) to populate dst fields
 //
 // Both src and dst must be pointers to structs.
 func (a *Adapter) Adapt(src, dst interface{}) error {
@@ -96,13 +97,24 @@ func (a *Adapter) Adapt(src, dst interface{}) error {
 }
 
 // getBoolMap retrieves a map from the pool and clears it
-func (a *Adapter) getBoolMap() map[string]bool {
-	m := a.boolMapPool.Get().(map[string]bool)
-	// Clear the map for reuse
-	for k := range m {
-		delete(m, k)
+// desiredCapacity is used to allocate properly-sized maps on first use from the pool
+func (a *Adapter) getBoolMap(desiredCapacity int) map[string]bool {
+	pooledMap := a.boolMapPool.Get().(map[string]bool)
+
+	// If this is a fresh/empty map from the pool, allocate with proper capacity
+	// After first use, maps are returned to pool already sized and will be reused as-is
+	if len(pooledMap) == 0 {
+		// Check if it's truly empty or just cleared - use a marker approach
+		// For simplicity, just allocate on empty and let pool warm up naturally
+		return make(map[string]bool, desiredCapacity)
 	}
-	return m
+
+	// Clear the map for reuse (fast even for large maps - just resets internal buckets)
+	for k := range pooledMap {
+		delete(pooledMap, k)
+	}
+
+	return pooledMap
 }
 
 // putBoolMap returns a map to the pool
@@ -123,9 +135,12 @@ func (a *Adapter) getOrBuildMetadata(typ reflect.Type) *structMetadata {
 		return cached.(*structMetadata)
 	}
 
+	// Count total fields including embedded structs for accurate preallocation
+	fieldCount := a.countFields(typ)
+
 	meta := &structMetadata{
-		fields:              make([]fieldInfo, 0, typ.NumField()),
-		fieldsByName:        make(map[string]*fieldInfo, typ.NumField()),
+		fields:              make([]fieldInfo, 0, fieldCount),
+		fieldsByName:        make(map[string]*fieldInfo, fieldCount),
 		additionalDataField: nil,
 	}
 
@@ -133,7 +148,7 @@ func (a *Adapter) getOrBuildMetadata(typ reflect.Type) *structMetadata {
 	a.buildFieldMetadata(typ, meta, nil)
 
 	// Build fieldsByName map AFTER all fields are added to prevent stale pointers
-	// (slice may have reallocated during buildFieldMetadata)
+	// (slice may have reallocated during buildFieldMetadata, though unlikely with correct capacity)
 	for i := range meta.fields {
 		meta.fieldsByName[meta.fields[i].name] = &meta.fields[i]
 	}
@@ -146,6 +161,35 @@ func (a *Adapter) getOrBuildMetadata(typ reflect.Type) *structMetadata {
 	// Store and return (handle race condition gracefully)
 	actual, _ := a.metadataCache.LoadOrStore(typ, meta)
 	return actual.(*structMetadata)
+}
+
+// countFields recursively counts all fields including those in embedded structs
+func (a *Adapter) countFields(typ reflect.Type) int {
+	count := 0
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+
+		// Skip unexported fields
+		if field.PkgPath != "" {
+			continue
+		}
+
+		// Handle embedded structs - recurse into them
+		if field.Anonymous {
+			fieldType := field.Type
+			// Dereference pointer if it's a pointer-to-struct
+			if fieldType.Kind() == reflect.Ptr {
+				fieldType = fieldType.Elem()
+			}
+			if fieldType.Kind() == reflect.Struct {
+				count += a.countFields(fieldType)
+				continue
+			}
+		}
+
+		count++
+	}
+	return count
 }
 
 // buildFieldMetadata recursively builds field metadata including embedded structs
@@ -201,9 +245,15 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 	var dstFieldsSet map[string]bool
 
 	if hasAdditionalDataProcessing {
-		// Get maps from pool for reuse
-		processedSrcFields = a.getBoolMap()
-		dstFieldsSet = a.getBoolMap()
+		// Get maps from pool for reuse, sized based on actual field counts
+		// Use the larger of src/dst field counts as capacity hint
+		mapCapacity := len(srcMeta.fields)
+		if len(dstMeta.fields) > mapCapacity {
+			mapCapacity = len(dstMeta.fields)
+		}
+
+		processedSrcFields = a.getBoolMap(mapCapacity)
+		dstFieldsSet = a.getBoolMap(mapCapacity)
 
 		// Ensure cleanup happens even on error
 		defer func() {
