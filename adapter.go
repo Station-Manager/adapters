@@ -13,11 +13,25 @@ import (
 // It is registered by field name and applies to any source/destination struct pair.
 type ConverterFunc func(src interface{}) (interface{}, error)
 
+type fieldInfo struct {
+	index            int
+	name             string
+	typ              reflect.Type
+	canSet           bool
+	isAdditionalData bool
+}
+
+type structMetadata struct {
+	fields       []fieldInfo
+	fieldsByName map[string]*fieldInfo
+}
+
 // Adapter manages field conversions and performs struct-to-struct adaptation
 // with special handling for AdditionalData fields of type null.JSON from github.com/aarondl/null/v8.
 type Adapter struct {
-	mu         sync.RWMutex
-	converters map[string]ConverterFunc // Maps field name -> converter function
+	mu            sync.RWMutex
+	converters    map[string]ConverterFunc // Maps field name -> converter function
+	metadataCache sync.Map                 // map[reflect.Type]*structMetadata
 }
 
 // New creates a new Adapter instance
@@ -64,57 +78,80 @@ func (a *Adapter) Adapt(src, dst interface{}) error {
 	return a.adaptStruct(dstVal, srcVal)
 }
 
+// getOrBuildMetadata retrieves or builds cached metadata for a struct type
+func (a *Adapter) getOrBuildMetadata(typ reflect.Type) *structMetadata {
+	if cached, ok := a.metadataCache.Load(typ); ok {
+		return cached.(*structMetadata)
+	}
+
+	meta := &structMetadata{
+		fields:       make([]fieldInfo, 0, typ.NumField()),
+		fieldsByName: make(map[string]*fieldInfo, typ.NumField()),
+	}
+
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		info := fieldInfo{
+			index:            i,
+			name:             field.Name,
+			typ:              field.Type,
+			canSet:           field.PkgPath == "", // exported field
+			isAdditionalData: field.Name == "AdditionalData" && field.Type == reflect.TypeOf(null.JSON{}),
+		}
+		meta.fields = append(meta.fields, info)
+		meta.fieldsByName[field.Name] = &meta.fields[len(meta.fields)-1]
+	}
+
+	// Store and return (handle race condition gracefully)
+	actual, _ := a.metadataCache.LoadOrStore(typ, meta)
+	return actual.(*structMetadata)
+}
+
 // adaptStruct performs the struct-to-struct adaptation
 func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 	dstType := dstVal.Type()
 	srcType := srcVal.Type()
 
-	// Track which source fields have been processed
-	processedSrcFields := make(map[string]bool)
+	// Get cached metadata
+	dstMeta := a.getOrBuildMetadata(dstType)
+	srcMeta := a.getOrBuildMetadata(srcType)
 
-	// Track which destination fields have been set
-	dstFieldsSet := make(map[string]bool)
+	// Pre-allocate maps with capacity
+	processedSrcFields := make(map[string]bool, len(srcMeta.fields))
+	dstFieldsSet := make(map[string]bool, len(dstMeta.fields))
 
 	// Step 1 & 2: Copy fields with the same name (with or without conversion)
-	for i := 0; i < dstType.NumField(); i++ {
-		dstField := dstVal.Field(i)
-		dstFieldType := dstType.Field(i)
+	for i := range dstMeta.fields {
+		dstFieldInfo := &dstMeta.fields[i]
 
-		// Skip unexported fields
-		if !dstField.CanSet() {
+		// Skip unexported or AdditionalData fields
+		if !dstFieldInfo.canSet || dstFieldInfo.isAdditionalData {
 			continue
 		}
 
-		// Skip AdditionalData field in the first pass
-		if dstFieldType.Name == "AdditionalData" {
-			continue
-		}
-
-		// Find a matching source field by name
-		srcField := srcVal.FieldByName(dstFieldType.Name)
-		if !srcField.IsValid() {
-			continue
-		}
-
-		// Check if the source and destination fields have the same type
-		srcFieldType, found := srcType.FieldByName(dstFieldType.Name)
+		// Find matching source field using cached metadata
+		srcFieldInfo, found := srcMeta.fieldsByName[dstFieldInfo.name]
 		if !found {
 			continue
 		}
 
-		// Skip source AdditionalData if it's not null.JSON
-		if srcFieldType.Name == "AdditionalData" && srcFieldType.Type != reflect.TypeOf(null.JSON{}) {
-			processedSrcFields[srcFieldType.Name] = true
+		// Skip source AdditionalData if not null.JSON
+		if srcFieldInfo.isAdditionalData {
+			processedSrcFields[srcFieldInfo.name] = true
 			continue
 		}
 
+		// Get field values by index (faster than FieldByName)
+		dstField := dstVal.Field(dstFieldInfo.index)
+		srcField := srcVal.Field(srcFieldInfo.index)
+
 		// Try to copy/convert the field
-		if err := a.adaptField(dstField, srcField, dstFieldType.Name); err != nil {
-			return fmt.Errorf("adapting field %s: %w", dstFieldType.Name, err)
+		if err := a.adaptField(dstField, srcField, dstFieldInfo.name); err != nil {
+			return fmt.Errorf("adapting field %s: %w", dstFieldInfo.name, err)
 		}
 
-		processedSrcFields[srcFieldType.Name] = true
-		dstFieldsSet[dstFieldType.Name] = true
+		processedSrcFields[srcFieldInfo.name] = true
+		dstFieldsSet[dstFieldInfo.name] = true
 	}
 
 	// Step 4: Unmarshal src.AdditionalData (null.JSON) to populate dst fields
