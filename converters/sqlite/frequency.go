@@ -24,12 +24,15 @@ func TypeToModelFreqConverter(src any) (any, error) {
 	return hz, nil
 }
 
+// ModelToTypeFreqConverter converts an int64 frequency in Hz to a string representing frequency in MHz with 3 decimal places.
+// Returns the converted string and an error if the input is not valid.
 func ModelToTypeFreqConverter(src any) (any, error) {
 	const op errors.Op = "converters.sqlite.ModelToTypeFreqConverter"
-	//srcVal, err := converters.CheckFloat64(src)
-	//if err != nil {
-	//	return "", errors.New(op).Err(err)
-	//}
-	//	retVal := strconv.FormatInt(srcVal, 10)
-	return "", nil
+	srcVal, err := converters.CheckInt64(src)
+	if err != nil {
+		return "", errors.New(op).Err(err)
+	}
+	val := float64(srcVal) / 1e6
+	retVal := strconv.FormatFloat(val, 'f', 3, 64)
+	return retVal, nil
 }

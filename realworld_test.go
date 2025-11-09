@@ -46,15 +46,20 @@ func (s *TestSuite) TestBasicCopy_TypeToModel() {
 	err := adapter.Adapt(&typeQso, &modelQso)
 	require.NoError(s.T(), err)
 	assert.Equal(s.T(), typeQso.ID, modelQso.ID)
-	//	assert.Equal(s.T(), int64(14320000), modelQso.Freq)
+	assert.Equal(s.T(), int64(14320000), modelQso.Freq)
 }
 
 func (s *TestSuite) TestBasicCopy_ModelToType() {
 	typeQso := types.Qso{}
-	modelQso := sqmodels.Qso{}
+	modelQso := sqmodels.Qso{
+		Freq: 14320000,
+	}
 
 	adapter := New()
+	adapter.RegisterConverter("Freq", sqlite.ModelToTypeFreqConverter)
+
 	err := adapter.Adapt(&modelQso, &typeQso)
 	require.NoError(s.T(), err)
 	assert.Equal(s.T(), modelQso.ID, typeQso.ID)
+	assert.Equal(s.T(), "14.320", typeQso.Freq)
 }
