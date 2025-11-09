@@ -5,6 +5,7 @@ import (
 	"github.com/goccy/go-json"
 	"reflect"
 	"sync"
+	"sync/atomic"
 
 	"github.com/aarondl/null/v8"
 )
@@ -29,24 +30,33 @@ type structMetadata struct {
 // Adapter manages field conversions and performs struct-to-struct adaptation
 // with special handling for AdditionalData fields of type null.JSON from github.com/aarondl/null/v8.
 type Adapter struct {
-	mu            sync.RWMutex
-	converters    map[string]ConverterFunc // Maps field name -> converter function
-	metadataCache sync.Map                 // map[reflect.Type]*structMetadata
+	//	mu            sync.RWMutex
+	//	converters    map[string]ConverterFunc // Maps field name -> converter function
+	converters    atomic.Value
+	metadataCache sync.Map // map[reflect.Type]*structMetadata
 }
 
 // New creates a new Adapter instance
 func New() *Adapter {
-	return &Adapter{
-		converters: make(map[string]ConverterFunc),
-	}
+	a := &Adapter{}
+	a.converters.Store(make(map[string]ConverterFunc))
+	return a
 }
 
 // RegisterConverter registers a converter function for a specific field name.
 // The converter will be applied to any field with this name during adaptation.
 func (a *Adapter) RegisterConverter(fieldName string, fn ConverterFunc) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.converters[fieldName] = fn
+	// Copy-on-write pattern for thread-safe map updates
+	oldMap := a.converters.Load().(map[string]ConverterFunc)
+	newMap := make(map[string]ConverterFunc, len(oldMap)+1)
+
+	// Copy existing converters
+	for k, v := range oldMap {
+		newMap[k] = v
+	}
+	newMap[fieldName] = fn
+
+	a.converters.Store(newMap)
 }
 
 // Adapt copies and converts fields from src to dst according to the adaptation rules:
@@ -207,10 +217,9 @@ func (a *Adapter) adaptField(dstField, srcField reflect.Value, fieldName string)
 	srcType := srcField.Type()
 	dstType := dstField.Type()
 
-	// Check if a converter is registered for this field name
-	a.mu.RLock()
-	converter, exists := a.converters[fieldName]
-	a.mu.RUnlock()
+	// Load converter map once (lock-free read) - CHANGED
+	converters := a.converters.Load().(map[string]ConverterFunc)
+	converter, exists := converters[fieldName]
 
 	if exists {
 		// Use registered converter
@@ -265,6 +274,9 @@ func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, srcAdditionalDat
 		return err
 	}
 
+	// Load converter map once (lock-free read) - CHANGED
+	converters := a.converters.Load().(map[string]ConverterFunc)
+
 	// Populate destination fields from AdditionalData
 	for fieldName, rawValue := range additionalFields {
 		// Skip if field was already set (rule: don't overwrite)
@@ -277,10 +289,8 @@ func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, srcAdditionalDat
 			continue
 		}
 
-		// Check if converter exists for this field
-		a.mu.RLock()
-		converter, exists := a.converters[fieldName]
-		a.mu.RUnlock()
+		// Check if converter exists for this field - CHANGED
+		converter, exists := converters[fieldName]
 
 		if exists {
 			// Unmarshal to interface{} first to preserve JSON types (e.g. float64 for numbers)
