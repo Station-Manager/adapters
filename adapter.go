@@ -23,8 +23,9 @@ type fieldInfo struct {
 }
 
 type structMetadata struct {
-	fields       []fieldInfo
-	fieldsByName map[string]*fieldInfo
+	fields              []fieldInfo
+	fieldsByName        map[string]*fieldInfo
+	additionalDataField *fieldInfo // Cached AdditionalData field info, nil if not present
 }
 
 // Adapter manages field conversions and performs struct-to-struct adaptation
@@ -95,12 +96,18 @@ func (a *Adapter) getOrBuildMetadata(typ reflect.Type) *structMetadata {
 	}
 
 	meta := &structMetadata{
-		fields:       make([]fieldInfo, 0, typ.NumField()),
-		fieldsByName: make(map[string]*fieldInfo, typ.NumField()),
+		fields:              make([]fieldInfo, 0, typ.NumField()),
+		fieldsByName:        make(map[string]*fieldInfo, typ.NumField()),
+		additionalDataField: nil,
 	}
 
 	// Build field metadata, handling embedded structs
 	a.buildFieldMetadata(typ, meta, nil)
+
+	// Cache AdditionalData field lookup if it exists
+	if adField, ok := meta.fieldsByName["AdditionalData"]; ok && adField.isAdditionalData {
+		meta.additionalDataField = adField
+	}
 
 	// Store and return (handle race condition gracefully)
 	actual, _ := a.metadataCache.LoadOrStore(typ, meta)
@@ -147,9 +154,16 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 	dstMeta := a.getOrBuildMetadata(dstType)
 	srcMeta := a.getOrBuildMetadata(srcType)
 
-	// Pre-allocate maps with capacity
-	processedSrcFields := make(map[string]bool, len(srcMeta.fields))
-	dstFieldsSet := make(map[string]bool, len(dstMeta.fields))
+	// Only allocate tracking maps if we have AdditionalData fields to process
+	hasAdditionalDataProcessing := srcMeta.additionalDataField != nil || dstMeta.additionalDataField != nil
+	var processedSrcFields map[string]bool
+	var dstFieldsSet map[string]bool
+
+	if hasAdditionalDataProcessing {
+		// Pre-allocate maps with capacity
+		processedSrcFields = make(map[string]bool, len(srcMeta.fields))
+		dstFieldsSet = make(map[string]bool, len(dstMeta.fields))
+	}
 
 	// Step 1 & 2: Copy fields with the same name (with or without conversion)
 	for i := range dstMeta.fields {
@@ -181,31 +195,29 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 			return fmt.Errorf("adapting field %s: %w", dstFieldInfo.name, err)
 		}
 
-		processedSrcFields[srcFieldInfo.name] = true
-		dstFieldsSet[dstFieldInfo.name] = true
+		if hasAdditionalDataProcessing {
+			processedSrcFields[srcFieldInfo.name] = true
+			dstFieldsSet[dstFieldInfo.name] = true
+		}
 	}
 
 	// Step 4: Unmarshal src.AdditionalData (null.JSON) to populate dst fields
-	srcAdditionalData := srcVal.FieldByName("AdditionalData")
-	if srcAdditionalData.IsValid() {
-		srcAdditionalDataType, found := srcType.FieldByName("AdditionalData")
-		if found && srcAdditionalDataType.Type == reflect.TypeOf(null.JSON{}) {
-			if err := a.unmarshalAdditionalData(dstVal, srcAdditionalData, dstFieldsSet); err != nil {
-				return fmt.Errorf("unmarshaling AdditionalData: %w", err)
-			}
+	if srcMeta.additionalDataField != nil {
+		srcAdditionalData := srcVal.FieldByIndex(srcMeta.additionalDataField.index)
+		if err := a.unmarshalAdditionalData(dstVal, srcAdditionalData, dstFieldsSet); err != nil {
+			return fmt.Errorf("unmarshaling AdditionalData: %w", err)
+		}
+		if hasAdditionalDataProcessing {
 			processedSrcFields["AdditionalData"] = true
 		}
 	}
 
 	// Step 3: Marshal remaining source fields to dst.AdditionalData (null.JSON)
-	dstAdditionalData := dstVal.FieldByName("AdditionalData")
-	if dstAdditionalData.IsValid() && dstAdditionalData.CanSet() {
-		dstAdditionalDataType, found := dstType.FieldByName("AdditionalData")
-		if found && dstAdditionalDataType.Type == reflect.TypeOf(null.JSON{}) {
-			// Marshal any remaining unprocessed source fields to AdditionalData
-			if err := a.marshalRemainingFields(dstAdditionalData, srcVal, srcType, processedSrcFields); err != nil {
-				return fmt.Errorf("marshaling remaining fields to AdditionalData: %w", err)
-			}
+	if dstMeta.additionalDataField != nil {
+		dstAdditionalData := dstVal.FieldByIndex(dstMeta.additionalDataField.index)
+		// Marshal any remaining unprocessed source fields to AdditionalData
+		if err := a.marshalRemainingFields(dstAdditionalData, srcVal, srcType, processedSrcFields); err != nil {
+			return fmt.Errorf("marshaling remaining fields to AdditionalData: %w", err)
 		}
 	}
 
