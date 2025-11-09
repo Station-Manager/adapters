@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/aarondl/null/v8"
+	boilertypes "github.com/aarondl/sqlboiler/v4/types"
 )
 
 // ConverterFunc is a function that converts a source field value to a destination field value.
@@ -234,12 +235,17 @@ func (a *Adapter) buildFieldMetadata(typ reflect.Type, meta *structMetadata, ind
 			continue
 		}
 
+		// Check if this is an AdditionalData field
+		// Support both null.JSON and sqlboiler types.JSON
+		isAdditionalDataField := field.Name == "AdditionalData" && (field.Type == reflect.TypeOf(null.JSON{}) ||
+			field.Type == reflect.TypeOf(boilertypes.JSON{}))
+
 		info := fieldInfo{
 			index:            fieldIndex,
 			name:             field.Name,
 			typ:              field.Type,
 			canSet:           true, // already checked it's exported
-			isAdditionalData: field.Name == "AdditionalData" && field.Type == reflect.TypeOf(null.JSON{}),
+			isAdditionalData: isAdditionalDataField,
 		}
 		meta.fields = append(meta.fields, info)
 	}
@@ -487,13 +493,35 @@ func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, dstMeta *structM
 func (a *Adapter) marshalRemainingFields(dstAdditionalData reflect.Value, srcVal reflect.Value, srcType reflect.Type, processedSrcFields map[string]bool) error {
 	remainingFields := make(map[string]interface{})
 
-	// Collect all fields including those from embedded structs
-	a.collectRemainingFields(srcVal, srcType, processedSrcFields, remainingFields)
+	// Get source metadata to iterate flattened fields
+	srcMeta := a.getOrBuildMetadata(srcType)
 
-	// If there are no remaining fields, set AdditionalData to null
-	if len(remainingFields) == 0 {
-		dstAdditionalData.Set(reflect.ValueOf(null.JSON{}))
-		return nil
+	// Collect unprocessed fields using flattened metadata
+	for i := range srcMeta.fields {
+		srcFieldInfo := &srcMeta.fields[i]
+
+		// Skip AdditionalData field
+		if srcFieldInfo.isAdditionalData {
+			continue
+		}
+
+		// Skip if already processed
+		if processedSrcFields[srcFieldInfo.name] {
+			continue
+		}
+
+		// Get field value by index (handles embedded structs)
+		srcField, ok := a.safeFieldByIndex(srcVal, srcFieldInfo.index)
+		if !ok || !srcField.CanInterface() {
+			continue
+		}
+
+		// Skip zero/empty values to keep AdditionalData compact
+		if srcField.IsZero() {
+			continue
+		}
+
+		remainingFields[srcFieldInfo.name] = srcField.Interface()
 	}
 
 	// Marshal to JSON
@@ -502,53 +530,24 @@ func (a *Adapter) marshalRemainingFields(dstAdditionalData reflect.Value, srcVal
 		return err
 	}
 
-	// Set the null.JSON field using JSONFrom
-	nullJSON := null.JSONFrom(jsonData)
-	dstAdditionalData.Set(reflect.ValueOf(nullJSON))
+	// Set AdditionalData field - support both null.JSON and types.JSON
+	dstType := dstAdditionalData.Type()
+	if dstType == reflect.TypeOf(null.JSON{}) {
+		// Set null.JSON field using JSONFrom
+		if len(remainingFields) == 0 {
+			dstAdditionalData.Set(reflect.ValueOf(null.JSON{}))
+		} else {
+			nullJSON := null.JSONFrom(jsonData)
+			dstAdditionalData.Set(reflect.ValueOf(nullJSON))
+		}
+	} else if dstType == reflect.TypeOf(boilertypes.JSON{}) {
+		// Set types.JSON field (which is just []byte underneath)
+		if len(remainingFields) == 0 {
+			dstAdditionalData.Set(reflect.ValueOf(boilertypes.JSON(nil)))
+		} else {
+			dstAdditionalData.Set(reflect.ValueOf(boilertypes.JSON(jsonData)))
+		}
+	}
 
 	return nil
-}
-
-// collectRemainingFields recursively collects fields from structs including embedded structs
-func (a *Adapter) collectRemainingFields(srcVal reflect.Value, srcType reflect.Type, processedSrcFields map[string]bool, remainingFields map[string]interface{}) {
-	for i := 0; i < srcType.NumField(); i++ {
-		srcFieldType := srcType.Field(i)
-		srcField := srcVal.Field(i)
-
-		// Skip unexported fields
-		if !srcField.CanInterface() {
-			continue
-		}
-
-		// Skip AdditionalData field
-		if srcFieldType.Name == "AdditionalData" {
-			continue
-		}
-
-		// If this is an embedded struct, recurse into it
-		// Support both direct embedded structs and pointer-to-struct embedded fields
-		if srcFieldType.Anonymous {
-			fieldVal := srcField
-			fieldType := srcField.Type()
-			// Dereference pointer if it's a pointer-to-struct
-			if fieldVal.Kind() == reflect.Ptr {
-				if fieldVal.IsNil() {
-					continue // Skip nil pointers
-				}
-				fieldVal = fieldVal.Elem()
-				fieldType = fieldVal.Type()
-			}
-			if fieldVal.Kind() == reflect.Struct {
-				a.collectRemainingFields(fieldVal, fieldType, processedSrcFields, remainingFields)
-				continue
-			}
-		}
-
-		// Skip if already processed
-		if processedSrcFields[srcFieldType.Name] {
-			continue
-		}
-
-		remainingFields[srcFieldType.Name] = srcField.Interface()
-	}
 }
