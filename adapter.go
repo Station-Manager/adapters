@@ -34,13 +34,19 @@ type Adapter struct {
 	//	mu            sync.RWMutex
 	//	converters    map[string]ConverterFunc // Maps field name -> converter function
 	converters    atomic.Value
-	metadataCache sync.Map // map[reflect.Type]*structMetadata
+	metadataCache sync.Map  // map[reflect.Type]*structMetadata
+	boolMapPool   sync.Pool // Pool for map[string]bool reuse
 }
 
 // New creates a new Adapter instance
 func New() *Adapter {
 	a := &Adapter{}
 	a.converters.Store(make(map[string]ConverterFunc))
+	a.boolMapPool = sync.Pool{
+		New: func() interface{} {
+			return make(map[string]bool, 80) // Pre-size for QSO: ~73 fields in types.Qso, ~60-65 go to AdditionalData
+		},
+	}
 	return a
 }
 
@@ -87,6 +93,28 @@ func (a *Adapter) Adapt(src, dst interface{}) error {
 	}
 
 	return a.adaptStruct(dstVal, srcVal)
+}
+
+// getBoolMap retrieves a map from the pool and clears it
+func (a *Adapter) getBoolMap() map[string]bool {
+	m := a.boolMapPool.Get().(map[string]bool)
+	// Clear the map for reuse
+	for k := range m {
+		delete(m, k)
+	}
+	return m
+}
+
+// putBoolMap returns a map to the pool
+func (a *Adapter) putBoolMap(m map[string]bool) {
+	if m == nil {
+		return
+	}
+	// Don't return excessively large maps to the pool (prevents memory bloat)
+	if len(m) > 128 {
+		return
+	}
+	a.boolMapPool.Put(m)
 }
 
 // getOrBuildMetadata retrieves or builds cached metadata for a struct type
@@ -160,9 +188,15 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 	var dstFieldsSet map[string]bool
 
 	if hasAdditionalDataProcessing {
-		// Pre-allocate maps with capacity
-		processedSrcFields = make(map[string]bool, len(srcMeta.fields))
-		dstFieldsSet = make(map[string]bool, len(dstMeta.fields))
+		// Get maps from pool for reuse
+		processedSrcFields = a.getBoolMap()
+		dstFieldsSet = a.getBoolMap()
+
+		// Ensure cleanup happens even on error
+		defer func() {
+			a.putBoolMap(processedSrcFields)
+			a.putBoolMap(dstFieldsSet)
+		}()
 	}
 
 	// Step 1 & 2: Copy fields with the same name (with or without conversion)
