@@ -410,14 +410,22 @@ func (a *Adapter) adaptField(dstField, srcField reflect.Value, fieldName string)
 
 // unmarshalAdditionalData unmarshals src.AdditionalData to populate dst fields
 func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, dstMeta *structMetadata, srcAdditionalData reflect.Value, dstFieldsSet map[string]bool) error {
-	// Get the null.JSON value
-	nullJSON, ok := srcAdditionalData.Interface().(null.JSON)
-	if !ok || !nullJSON.Valid {
-		return nil // No data to unmarshal
-	}
+	var jsonData []byte
 
-	// Get the JSON data
-	jsonData := nullJSON.JSON
+	// Try null.JSON first
+	if nullJSON, ok := srcAdditionalData.Interface().(null.JSON); ok {
+		if !nullJSON.Valid {
+			return nil // No data to unmarshal
+		}
+		jsonData = nullJSON.JSON
+	} else if boilerJSON, ok := srcAdditionalData.Interface().(boilertypes.JSON); ok {
+		if len(boilerJSON) == 0 {
+			return nil // No data to unmarshal
+		}
+		jsonData = boilerJSON
+	} else {
+		return nil // Not a supported JSON type
+	}
 
 	// Unmarshal to a map
 	var additionalFields map[string]json.RawMessage

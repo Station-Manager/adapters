@@ -6,7 +6,8 @@ import (
 	"github.com/aarondl/null/v8"
 )
 
-func TypeToModelCountryConverter(src any) (any, error) {
+// TypeToModelStringConverter converts a string to a model null.String.
+func TypeToModelStringConverter(src any) (any, error) {
 	const op errors.Op = "converters.common.TypeToModelCountryConverter"
 	srcVal, err := converters.CheckString(op, src)
 	if err != nil {
@@ -22,10 +23,11 @@ func TypeToModelCountryConverter(src any) (any, error) {
 	return null.StringFrom(srcVal), nil
 }
 
-func ModelToTypeCountryConverter(src any) (any, error) {
+// ModelToTypeStringConverter converts a model null.String to a string.
+func ModelToTypeStringConverter(src any) (any, error) {
 	const op errors.Op = "converters.common.ModelToTypeCountryConverter"
 
-	// Handle null.String type from SQLite model
+	// Handle null.String type
 	if nullStr, ok := src.(null.String); ok {
 		if !nullStr.Valid {
 			return "", nil

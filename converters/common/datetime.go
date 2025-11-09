@@ -76,6 +76,25 @@ func TypeToModelTimeConverter(src any) (any, error) {
 	return retVal, nil
 }
 
+func ModelToTypeTimeConverter(src any) (any, error) {
+	const op errors.Op = "converters.sqlite.ModelToTypeDateConverter"
+	srcVal, err := converters.CheckString(op, src)
+	if err != nil {
+		return "", errors.New(op).Err(err)
+	}
+
+	if len(srcVal) != 8 {
+		return "", errors.New(op).Msg(converters.ErrMsgBadDateFormat)
+	}
+
+	retVal, err := time.Parse("1504", srcVal)
+	if err != nil {
+		return "", errors.New(op).Err(err).Msg(converters.ErrMsgBadDateFormat)
+	}
+
+	return retVal.Format("15:04"), nil
+}
+
 func ModelToTypeDateConverter(src any) (any, error) {
 	const op errors.Op = "converters.sqlite.ModelToTypeDateConverter"
 	srcVal, err := converters.CheckString(op, src)
