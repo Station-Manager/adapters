@@ -1,4 +1,4 @@
-package sqlite
+package common
 
 import (
 	"github.com/Station-Manager/adapters/converters"
