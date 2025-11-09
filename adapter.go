@@ -161,6 +161,23 @@ func (a *Adapter) getOrBuildMetadata(typ reflect.Type) *structMetadata {
 	return actual.(*structMetadata)
 }
 
+// safeFieldByIndex is like FieldByIndex but returns false if any intermediate pointer is nil
+func (a *Adapter) safeFieldByIndex(val reflect.Value, index []int) (reflect.Value, bool) {
+	for i, x := range index {
+		if i > 0 {
+			// Check if this is a nil pointer before dereferencing
+			if val.Kind() == reflect.Ptr {
+				if val.IsNil() {
+					return reflect.Value{}, false
+				}
+				val = val.Elem()
+			}
+		}
+		val = val.Field(x)
+	}
+	return val, true
+}
+
 // countFields recursively counts all fields including those in embedded structs
 func (a *Adapter) countFields(typ reflect.Type) int {
 	count := 0
@@ -284,8 +301,13 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 		}
 
 		// Get field values by index (faster than FieldByName)
+		// Handle nil pointers in embedded field paths
+		srcField, ok := a.safeFieldByIndex(srcVal, srcFieldInfo.index)
+		if !ok {
+			// Embedded pointer is nil, skip this field
+			continue
+		}
 		dstField := dstVal.FieldByIndex(dstFieldInfo.index)
-		srcField := srcVal.FieldByIndex(srcFieldInfo.index)
 
 		// Try to copy/convert the field
 		if err := a.adaptField(dstField, srcField, dstFieldInfo.name); err != nil {
