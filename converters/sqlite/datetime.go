@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-// TypeToModelDateConverter converts a date value from a string to a time.Time.
+// TypeToModelDateConverter converts a date value from a string to a correctly formatted string.
 // The source value is expected to be a string representation of a date in YYYYMMDD or YYYY-MM-DD format.
-// Returns the converted date or an error if the source is invalid or conversion fails.
+// Returns the formatted date (YYYYMMDD) or an error if the source is invalid or conversion fails.
 //
 // This is a converter that can only be used with an sqlite database, which stores dates as a string.
 func TypeToModelDateConverter(src any) (any, error) {
@@ -38,9 +38,9 @@ func TypeToModelDateConverter(src any) (any, error) {
 	return retVal.Format("20060102"), nil
 }
 
-// ModelToTypeDateConverter converts a date value from a string to a time.Time.
+// ModelToTypeDateConverter converts a date value from a string to a correctly formatted string
 // The source value is expected to be a string representation of a date in YYYYMMDD or YYYY-MM-DD format.
-// Returns the converted date or an error if the source is invalid or conversion fails.
+// Returns the formatted date (YYYY-MM-DD) or an error if the source is invalid or conversion fails.
 //
 // This is a converter that can only be used with an sqlite database, which stores dates as a string.
 func ModelToTypeDateConverter(src any) (any, error) {
@@ -62,7 +62,11 @@ func ModelToTypeDateConverter(src any) (any, error) {
 	return retVal.Format("2006-01-02"), nil
 }
 
-// TypeToModelTimeConverter converts a string time value from a string to a string
+// TypeToModelTimeConverter converts a string time value from to a correctly formatted string.
+// The source value is expected to be a string representation of a time in HHMM or HH:MM format.
+// Returns the formatted time (HHMM) or an error if the source is invalid or conversion fails.
+//
+// This is a converter that can only be used with an sqlite database, which stores times as a string.
 func TypeToModelTimeConverter(src any) (any, error) {
 	const op errors.Op = "converters.sqlite.TypeToModelTimeConverter"
 	srcVal, err := converters.CheckString(op, src)
@@ -91,6 +95,11 @@ func TypeToModelTimeConverter(src any) (any, error) {
 	return retVal.Format("1504"), nil
 }
 
+// ModelToTypeTimeConverter converts a string time value from to a correctly formatted string.
+// The source value is expected to be a string representation of a time in HHMM format.
+// Returns the formatted time (HH:MM) or an error if the source is invalid or conversion fails.
+//
+// This is a converter that can only be used with an sqlite database, which stores times as a string.
 func ModelToTypeTimeConverter(src any) (any, error) {
 	const op errors.Op = "converters.sqlite.ModelToTypeDateConverter"
 	srcVal, err := converters.CheckString(op, src)
