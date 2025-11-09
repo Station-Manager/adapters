@@ -3,6 +3,7 @@ package converters
 import (
 	"github.com/Station-Manager/errors"
 	"math"
+	"time"
 )
 
 func CheckString(op errors.Op, src any) (string, error) {
@@ -61,4 +62,13 @@ func CheckInt64(op errors.Op, src any) (int64, error) {
 	default:
 		return -1, errors.New(op).Errorf("Given parameter not an integer, got %T", src)
 	}
+}
+
+func CheckTime(op errors.Op, src any) (time.Time, error) {
+	srcVal, ok := src.(time.Time)
+	if !ok {
+		return time.Time{}, errors.New(op).Errorf("Given parameter not a string, got %T", src)
+	}
+	// We don't report if it is a Zero Time instant.
+	return srcVal, nil
 }
