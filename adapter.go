@@ -21,6 +21,7 @@ type fieldInfo struct {
 	typ              reflect.Type
 	canSet           bool
 	isAdditionalData bool
+	ignore           bool // Set to true if field has `adapter:"ignore"` or `adapter:"-"` tag
 }
 
 type structMetadata struct {
@@ -31,6 +32,10 @@ type structMetadata struct {
 
 // Adapter manages field conversions and performs struct-to-struct adaptation
 // with special handling for AdditionalData fields of type null.JSON from github.com/aarondl/null/v8.
+//
+// Fields can be excluded from adaptation using struct tags:
+//   - `adapter:"ignore"` - Skip this field during adaptation
+//   - `adapter:"-"`      - Skip this field during adaptation (alternative syntax)
 type Adapter struct {
 	//	mu            sync.RWMutex
 	//	converters    map[string]ConverterFunc // Maps field name -> converter function
@@ -74,6 +79,9 @@ func (a *Adapter) RegisterConverter(fieldName string, fn ConverterFunc) {
 //  3. Marshal remaining source fields to dst.AdditionalData (null.JSON), if present.
 //  4. Unmarshal src.AdditionalData (null.JSON) to populate dst fields
 //
+// Fields can be excluded from adaptation by adding the `adapter:"ignore"` or `adapter:"-"` struct tag.
+// Ignored fields will not be copied, converted, or included in AdditionalData marshaling.
+//
 // Both src and dst must be pointers to structs.
 func (a *Adapter) Adapt(src, dst interface{}) error {
 	if src == nil || dst == nil {
@@ -97,8 +105,8 @@ func (a *Adapter) Adapt(src, dst interface{}) error {
 	return a.adaptStruct(dstVal, srcVal)
 }
 
-// getBoolMap retrieves a map from the pool and clears it
-// desiredCapacity is used to allocate properly-sized maps on first use from the pool
+// getBoolMap retrieves a map from the pool and clears it.
+// desiredCapacity is used to allocate appropriately sized maps on first use from the pool.
 func (a *Adapter) getBoolMap(desiredCapacity int) map[string]bool {
 	pooledMap := a.boolMapPool.Get().(map[string]bool)
 
@@ -143,7 +151,7 @@ func (a *Adapter) getOrBuildMetadata(typ reflect.Type) *structMetadata {
 		additionalDataField: nil,
 	}
 
-	// Build field metadata, handling embedded structs
+	// Build field metadata, handling embedded structs and struct tags
 	a.buildFieldMetadata(typ, meta, nil)
 
 	// Build fieldsByName map AFTER all fields are added to prevent stale pointers
@@ -235,6 +243,10 @@ func (a *Adapter) buildFieldMetadata(typ reflect.Type, meta *structMetadata, ind
 			continue
 		}
 
+		// Parse adapter struct tag to check if field should be ignored
+		adapterTag := field.Tag.Get("adapter")
+		shouldIgnore := adapterTag == "ignore" || adapterTag == "-"
+
 		// Check if this is an AdditionalData field
 		// Support both null.JSON and sqlboiler types.JSON
 		isAdditionalDataField := field.Name == "AdditionalData" && (field.Type == reflect.TypeOf(null.JSON{}) ||
@@ -246,6 +258,7 @@ func (a *Adapter) buildFieldMetadata(typ reflect.Type, meta *structMetadata, ind
 			typ:              field.Type,
 			canSet:           true, // already checked it's exported
 			isAdditionalData: isAdditionalDataField,
+			ignore:           shouldIgnore,
 		}
 		meta.fields = append(meta.fields, info)
 	}
@@ -287,8 +300,8 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 	for i := range dstMeta.fields {
 		dstFieldInfo := &dstMeta.fields[i]
 
-		// Skip unexported or AdditionalData fields
-		if !dstFieldInfo.canSet || dstFieldInfo.isAdditionalData {
+		// Skip unexported, ignored, or AdditionalData fields
+		if !dstFieldInfo.canSet || dstFieldInfo.isAdditionalData || dstFieldInfo.ignore {
 			continue
 		}
 
@@ -298,8 +311,8 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 			continue
 		}
 
-		// Skip source AdditionalData if not null.JSON
-		if srcFieldInfo.isAdditionalData {
+		// Skip source AdditionalData or ignored fields
+		if srcFieldInfo.isAdditionalData || srcFieldInfo.ignore {
 			if hasAdditionalDataProcessing {
 				processedSrcFields[srcFieldInfo.name] = true
 			}
@@ -445,8 +458,8 @@ func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, dstMeta *structM
 
 		// Look up field in metadata (fast map lookup)
 		dstFieldInfo, found := dstMeta.fieldsByName[fieldName]
-		if !found || !dstFieldInfo.canSet {
-			continue // Field doesn't exist or isn't settable
+		if !found || !dstFieldInfo.canSet || dstFieldInfo.ignore {
+			continue // Field doesn't exist, isn't settable, or is ignored
 		}
 
 		// Use cached index for fast field access
@@ -508,8 +521,8 @@ func (a *Adapter) marshalRemainingFields(dstAdditionalData reflect.Value, srcVal
 	for i := range srcMeta.fields {
 		srcFieldInfo := &srcMeta.fields[i]
 
-		// Skip AdditionalData field
-		if srcFieldInfo.isAdditionalData {
+		// Skip AdditionalData or ignored fields
+		if srcFieldInfo.isAdditionalData || srcFieldInfo.ignore {
 			continue
 		}
 
