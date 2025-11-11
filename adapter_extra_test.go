@@ -27,7 +27,7 @@ func TestValidator_PrecedencePairOverridesOthers(t *testing.T) {
 	a.RegisterValidatorForPair(S{}, D{}, "V", func(v any) error { return nil })
 	s := S{V: 1}
 	d := D{}
-	err := a.Adapt(&s, &d)
+	err := a.Into(&d, &s)
 	// Should succeed because pair validator wins
 	require.NoError(t, err)
 	assert.Equal(t, 1, d.V)
@@ -43,7 +43,7 @@ func TestBuilder_ValidatorPairPrecedence(t *testing.T) {
 	a := b.Build()
 	s := bsSrc{Name: "x"}
 	d := bsDst{}
-	err := a.Adapt(&s, &d)
+	err := a.Into(&d, &s)
 	require.NoError(t, err)
 	assert.Equal(t, "X", d.Name)
 }
@@ -60,7 +60,7 @@ func TestAdditionalData_ExcludeZeroValues(t *testing.T) {
 	type D struct{ AdditionalData null.JSON }
 	s := S{} // all zero values
 	d := D{}
-	require.NoError(t, a.Adapt(&s, &d))
+	require.NoError(t, a.Into(&d, &s))
 	assert.False(t, d.AdditionalData.Valid, "no remaining non-zero fields => should not marshal")
 }
 
@@ -76,7 +76,7 @@ func TestAdditionalData_OverwritePolicyPreferAdditional(t *testing.T) {
 	b, _ := json.Marshal(m)
 	s := S{Name: "Field", AdditionalData: null.JSONFrom(b)}
 	d := D{}
-	require.NoError(t, a.Adapt(&s, &d))
+	require.NoError(t, a.Into(&d, &s))
 	assert.Equal(t, "AD", d.Name)
 }
 
@@ -90,7 +90,7 @@ func TestAdditionalData_ConverterError_NoFallback(t *testing.T) {
 	b, _ := json.Marshal(m)
 	s := S{AdditionalData: null.JSONFrom(b)}
 	d := D{}
-	err := a.Adapt(&s, &d)
+	err := a.Into(&d, &s)
 	require.NoError(t, err) // adaptation itself does not error (converter error ignored for AdditionalData field)
 	assert.Equal(t, 0, d.X) // field not set
 }
@@ -144,7 +144,7 @@ func TestValidators_ConcurrentRegistrationAndAdapt(t *testing.T) {
 			for i := 0; i < 200; i++ {
 				s := S{V: i}
 				d := D{}
-				err := a.Adapt(&s, &d)
+				err := a.Into(&d, &s)
 				if err != nil {
 					t.Fatalf("unexpected validator error: %v", err)
 				}
@@ -173,6 +173,6 @@ func TestAdditionalData_CaseInsensitiveConflictPrefersDirect(t *testing.T) {
 	b, _ := json.Marshal(m)
 	s := S{Name: "Direct", AdditionalData: null.JSONFrom(b)}
 	d := D{}
-	require.NoError(t, a.Adapt(&s, &d))
+	require.NoError(t, a.Into(&d, &s))
 	assert.Equal(t, "Direct", d.Name) // direct field precedence retained when PreferFields
 }

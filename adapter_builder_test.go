@@ -43,7 +43,7 @@ func TestBuilder_ScopedPrecedence_WithValidators(t *testing.T) {
 	a := b.Build()
 	s := bSrc{Name: "MiXeD"}
 	d := bDst{}
-	require.NoError(t, a.Adapt(&s, &d))
+	require.NoError(t, a.Into(&d, &s))
 	assert.Equal(t, "PAIR", d.Name)
 }
 
@@ -62,7 +62,7 @@ func TestValidators_FromAdditionalData(t *testing.T) {
 	b, _ := json.Marshal(ad)
 	s := S{AdditionalData: null.JSONFrom(b)}
 	d := D{}
-	err := a.Adapt(&s, &d)
+	err := a.Into(&d, &s)
 	assert.Error(t, err)
 }
 
@@ -78,7 +78,17 @@ func TestWarmMetadata_Smoke(t *testing.T) {
 	// Adapt still works
 	s := S{A: 1, B: 2}
 	d := D{}
-	require.NoError(t, a.Adapt(&s, &d))
+	require.NoError(t, a.Into(&d, &s))
 	assert.Equal(t, 1, d.A)
 	assert.Equal(t, 2, d.B)
+}
+
+func TestGeneric_AdaptTo(t *testing.T) {
+	a := New()
+	type S struct{ A int }
+	type D struct{ A int }
+	s := S{A: 3}
+	d, err := AdaptTo[D](a, &s)
+	require.NoError(t, err)
+	assert.Equal(t, 3, d.A)
 }

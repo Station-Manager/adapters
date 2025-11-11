@@ -27,7 +27,7 @@ func TestDisableMarshal_PreventsAdditionalData(t *testing.T) {
 		A              int
 		AdditionalData null.JSON
 	}{}
-	require.NoError(t, a.Adapt(&s, &d))
+	require.NoError(t, a.Into(&d, &s))
 	assert.False(t, d.AdditionalData.Valid)
 }
 
@@ -36,7 +36,7 @@ func TestDisableUnmarshal_SkipsExpansion(t *testing.T) {
 	a := NewWithOptions(WithDisableUnmarshalAdditionalData(true))
 	s := mSrc{A: 1, AdditionalData: null.JSONFrom(b)}
 	d := mDst{}
-	require.NoError(t, a.Adapt(&s, &d))
+	require.NoError(t, a.Into(&d, &s))
 	assert.Equal(t, 0, d.B)
 }
 
@@ -47,7 +47,7 @@ func TestValidatorPairScope_Error(t *testing.T) {
 	a.RegisterValidatorForPair(S{}, D{}, "X", func(v any) error { return errors.New("pair fail") })
 	s := S{X: 1}
 	d := D{}
-	err := a.Adapt(&s, &d)
+	err := a.Into(&d, &s)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "pair fail")
 }

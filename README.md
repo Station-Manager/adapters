@@ -24,7 +24,34 @@ go get github.com/Station-Manager/adapters
 ```go
 // Basic usage
 adapter := adapters.New()
-err := adapter.Adapt(&dst, &src)
+err := adapter.Into(&dst, &src)
+```
+
+### Generics helpers
+
+```go
+// Allocate and adapt in one step
+out, err := adapter.AdaptTo[Dest](&src)
+// or
+var d Dest
+_ = adapter.Copy(&d, &src)
+```
+
+### Batch registration
+
+```go
+adapter.Batch(func(r *adapters.RegistryBatch){
+    r.GlobalConverter("Temperature", conv)
+    r.GlobalValidator("Name", notEmpty)
+})
+```
+
+### AdditionalData field rename
+
+```go
+type D struct {
+    Extras null.JSON `adapter:"additional" json:"extras"`
+}
 ```
 
 ### Converters

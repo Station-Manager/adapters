@@ -43,7 +43,8 @@ func (s *TestSuite) TestBasicCopy_TypeToModel() {
 	adapter := New()
 	adapter.RegisterConverter("Freq", common.TypeToModelFreqConverter)
 
-	err := adapter.Adapt(&typeQso, &modelQso)
+	// We want to copy Type->Model, so destination is &modelQso, source &typeQso
+	err := adapter.Into(&modelQso, &typeQso)
 	require.NoError(s.T(), err)
 	assert.Equal(s.T(), typeQso.ID, modelQso.ID)
 	assert.Equal(s.T(), int64(14320000), modelQso.Freq)
@@ -58,7 +59,8 @@ func (s *TestSuite) TestBasicCopy_ModelToType() {
 	adapter := New()
 	adapter.RegisterConverter("Freq", common.ModelToTypeFreqConverter)
 
-	err := adapter.Adapt(&modelQso, &typeQso)
+	// Copy Model->Type so destination is &typeQso, source &modelQso
+	err := adapter.Into(&typeQso, &modelQso)
 	require.NoError(s.T(), err)
 	assert.Equal(s.T(), modelQso.ID, typeQso.ID)
 	assert.Equal(s.T(), "14.320", typeQso.Freq)

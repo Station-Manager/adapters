@@ -21,7 +21,7 @@ func TestBuilder_ConverterDstScopePrecedence(t *testing.T) {
 	a := b.Build()
 	s := bsSrc{Name: "MiXeD"}
 	d := bsDst{}
-	require.NoError(t, a.Adapt(&s, &d))
+	require.NoError(t, a.Into(&d, &s))
 	assert.Equal(t, "mixed", d.Name)
 }
 
@@ -34,6 +34,6 @@ func TestBuilder_ConverterPairScopePrecedence(t *testing.T) {
 	a := b.Build()
 	s := bsSrc{Name: "MiXeD"}
 	d := bsDst2{}
-	require.NoError(t, a.Adapt(&s, &d))
+	require.NoError(t, a.Into(&d, &s))
 	assert.Equal(t, "PAIRWIN", d.Name)
 }

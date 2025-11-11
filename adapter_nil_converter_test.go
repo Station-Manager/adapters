@@ -35,7 +35,7 @@ func TestAdapter_ConverterReturnsNil(t *testing.T) {
 
 	dst := &Dest{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Test", dst.Name)
@@ -65,7 +65,7 @@ func TestAdapter_ConverterReturnsTypedNil(t *testing.T) {
 	src := &Source{Ptr: &str}
 	dst := &Dest{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Nil(t, dst.Ptr)

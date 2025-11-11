@@ -45,7 +45,7 @@ func TestAdapter_UnmarshalFromBoilerJSON(t *testing.T) {
 
 	dst := &DestFromBoilerJSON{}
 
-	err = adapter.Adapt(src, dst)
+	err = adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Test User", dst.Name)
@@ -67,7 +67,7 @@ func TestAdapter_EmptyBoilerJSON(t *testing.T) {
 
 	dst := &DestFromBoilerJSON{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Test User", dst.Name)
@@ -90,7 +90,7 @@ func TestAdapter_NilBoilerJSON(t *testing.T) {
 
 	dst := &DestFromBoilerJSON{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Test User", dst.Name)
@@ -110,7 +110,7 @@ func TestAdapter_InvalidBoilerJSON(t *testing.T) {
 
 	dst := &DestFromBoilerJSON{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	// Should handle invalid JSON gracefully
 	assert.Error(t, err)
 }
@@ -145,7 +145,7 @@ func TestAdapter_MarshalToBoilerJSON(t *testing.T) {
 
 	dst := &DestWithBoilerJSON{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Test User", dst.Name)
@@ -181,13 +181,13 @@ func TestAdapter_BoilerJSONRoundTrip(t *testing.T) {
 
 	intermediate := &DestWithBoilerJSON{}
 
-	err := adapter.Adapt(src, intermediate)
+	err := adapter.Into(intermediate, src)
 	require.NoError(t, err)
 
 	// Step 2: Unmarshal from BoilerJSON
 	dst := &DestFromBoilerJSON{}
 
-	err = adapter.Adapt(intermediate, dst)
+	err = adapter.Into(dst, intermediate)
 	require.NoError(t, err)
 
 	// Verify all fields are preserved
@@ -228,7 +228,7 @@ func TestAdapter_ConverterWithBoilerJSON(t *testing.T) {
 
 	dst := &DestFromBoilerJSON{}
 
-	err = adapter.Adapt(src, dst)
+	err = adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Test User", dst.Name)
@@ -262,7 +262,7 @@ func TestAdapter_BoilerJSONPrecedence(t *testing.T) {
 
 	dst := &DestBasicFromBoiler{}
 
-	err = adapter.Adapt(src, dst)
+	err = adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	// Direct fields should take precedence

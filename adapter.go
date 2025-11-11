@@ -119,6 +119,7 @@ type Adapter struct {
 	metadataCache sync.Map     // map[reflect.Type]*structMetadata
 	boolMapPool   sync.Pool    // Pool for map[string]bool reuse
 	options       Options
+	gen           atomic.Uint64 // increments on registry changes for plan invalidation
 }
 
 // New creates an Adapter with default options.
@@ -137,6 +138,8 @@ func NewWithOptions(opts ...Option) *Adapter {
 	vreg := &validatorRegistry{global: make(map[string]ValidatorFunc), byDst: make(map[reflect.Type]map[string]ValidatorFunc), byPair: make(map[[2]reflect.Type]map[string]ValidatorFunc)}
 	a.validators.Store(vreg)
 	a.boolMapPool = sync.Pool{New: func() interface{} { return (map[string]bool)(nil) }}
+	// generation starts at 1
+	a.gen.Store(1)
 	return a
 }
 
@@ -167,6 +170,7 @@ func (a *Adapter) RegisterConverter(fieldName string, fn ConverterFunc) {
 	}
 	newReg.global[fieldName] = fn
 	a.converters.Store(newReg)
+	a.gen.Add(1)
 }
 
 // RegisterConverterFor scope: destination type + fieldName.
@@ -205,6 +209,7 @@ func (a *Adapter) RegisterConverterFor(dstType any, fieldName string, fn Convert
 	}
 	m[fieldName] = fn
 	a.converters.Store(newReg)
+	a.gen.Add(1)
 }
 
 // RegisterConverterForPair scope: (srcType,dstType)+fieldName highest precedence.
@@ -248,6 +253,7 @@ func (a *Adapter) RegisterConverterForPair(srcType, dstType any, fieldName strin
 	}
 	m[fieldName] = fn
 	a.converters.Store(newReg)
+	a.gen.Add(1)
 }
 
 // RegisterValidator adds a global validator for a field name.
@@ -273,6 +279,7 @@ func (a *Adapter) RegisterValidator(fieldName string, fn ValidatorFunc) {
 	}
 	newReg.global[fieldName] = fn
 	a.validators.Store(newReg)
+	a.gen.Add(1)
 }
 
 // RegisterValidatorFor adds a validator scoped to a destination type.
@@ -307,6 +314,7 @@ func (a *Adapter) RegisterValidatorFor(dstType any, fieldName string, fn Validat
 	}
 	m[fieldName] = fn
 	a.validators.Store(newReg)
+	a.gen.Add(1)
 }
 
 // RegisterValidatorForPair adds a validator scoped to (srcType,dstType) for a field name.
@@ -346,27 +354,186 @@ func (a *Adapter) RegisterValidatorForPair(srcType, dstType any, fieldName strin
 	}
 	m[fieldName] = fn
 	a.validators.Store(newReg)
+	a.gen.Add(1)
 }
 
-// WarmMetadata pre-builds metadata for provided example values or types (pass either a value or a *T or T).
-func (a *Adapter) WarmMetadata(examples ...any) {
-	for _, e := range examples {
-		if e == nil {
-			continue
-		}
-		t := reflect.TypeOf(e)
-		if t.Kind() == reflect.Ptr {
-			t = t.Elem()
-		}
-		if t.Kind() != reflect.Struct {
-			continue
-		}
-		_ = a.getOrBuildMetadata(t)
+// Batch registration to reduce COW churn
+type RegistryBatch struct {
+	convGlobal map[string]ConverterFunc
+	convDst    map[reflect.Type]map[string]ConverterFunc
+	convPair   map[[2]reflect.Type]map[string]ConverterFunc
+	valGlobal  map[string]ValidatorFunc
+	valDst     map[reflect.Type]map[string]ValidatorFunc
+	valPair    map[[2]reflect.Type]map[string]ValidatorFunc
+}
+
+func (a *Adapter) Batch(apply func(*RegistryBatch)) {
+	b := &RegistryBatch{
+		convGlobal: make(map[string]ConverterFunc),
+		convDst:    make(map[reflect.Type]map[string]ConverterFunc),
+		convPair:   make(map[[2]reflect.Type]map[string]ConverterFunc),
+		valGlobal:  make(map[string]ValidatorFunc),
+		valDst:     make(map[reflect.Type]map[string]ValidatorFunc),
+		valPair:    make(map[[2]reflect.Type]map[string]ValidatorFunc),
 	}
+	apply(b)
+	// merge into copies of current registries and swap once
+	oldC := a.converters.Load().(*converterRegistry)
+	newC := &converterRegistry{global: map[string]ConverterFunc{}, byDst: map[reflect.Type]map[string]ConverterFunc{}, byPair: map[[2]reflect.Type]map[string]ConverterFunc{}}
+	for k, v := range oldC.global {
+		newC.global[k] = v
+	}
+	for t, m := range oldC.byDst {
+		sub := map[string]ConverterFunc{}
+		for k, v := range m {
+			sub[k] = v
+		}
+		newC.byDst[t] = sub
+	}
+	for k, m := range oldC.byPair {
+		sub := map[string]ConverterFunc{}
+		for fk, fv := range m {
+			sub[fk] = fv
+		}
+		newC.byPair[k] = sub
+	}
+	for k, v := range b.convGlobal {
+		newC.global[k] = v
+	}
+	for t, m := range b.convDst {
+		sub := newC.byDst[t]
+		if sub == nil {
+			sub = map[string]ConverterFunc{}
+			newC.byDst[t] = sub
+		}
+		for k, v := range m {
+			sub[k] = v
+		}
+	}
+	for k, m := range b.convPair {
+		sub := newC.byPair[k]
+		if sub == nil {
+			sub = map[string]ConverterFunc{}
+			newC.byPair[k] = sub
+		}
+		for fk, fv := range m {
+			sub[fk] = fv
+		}
+	}
+	oldV := a.validators.Load().(*validatorRegistry)
+	newV := &validatorRegistry{global: map[string]ValidatorFunc{}, byDst: map[reflect.Type]map[string]ValidatorFunc{}, byPair: map[[2]reflect.Type]map[string]ValidatorFunc{}}
+	for k, v := range oldV.global {
+		newV.global[k] = v
+	}
+	for t, m := range oldV.byDst {
+		sub := map[string]ValidatorFunc{}
+		for k, v := range m {
+			sub[k] = v
+		}
+		newV.byDst[t] = sub
+	}
+	for k, m := range oldV.byPair {
+		sub := map[string]ValidatorFunc{}
+		for fk, fv := range m {
+			sub[fk] = fv
+		}
+		newV.byPair[k] = sub
+	}
+	for k, v := range b.valGlobal {
+		newV.global[k] = v
+	}
+	for t, m := range b.valDst {
+		sub := newV.byDst[t]
+		if sub == nil {
+			sub = map[string]ValidatorFunc{}
+			newV.byDst[t] = sub
+		}
+		for k, v := range m {
+			sub[k] = v
+		}
+	}
+	for k, m := range b.valPair {
+		sub := newV.byPair[k]
+		if sub == nil {
+			sub = map[string]ValidatorFunc{}
+			newV.byPair[k] = sub
+		}
+		for fk, fv := range m {
+			sub[fk] = fv
+		}
+	}
+	a.converters.Store(newC)
+	a.validators.Store(newV)
+	a.gen.Add(1)
 }
 
-// Adapt performs adaptation from src -> dst.
-func (a *Adapter) Adapt(src, dst interface{}) error {
+// RegistryBatch helpers
+func (b *RegistryBatch) GlobalConverter(field string, fn ConverterFunc) { b.convGlobal[field] = fn }
+func (b *RegistryBatch) ConverterFor(dst any, field string, fn ConverterFunc) {
+	dt := reflect.TypeOf(dst)
+	if dt.Kind() == reflect.Ptr {
+		dt = dt.Elem()
+	}
+	m := b.convDst[dt]
+	if m == nil {
+		m = map[string]ConverterFunc{}
+		b.convDst[dt] = m
+	}
+	m[field] = fn
+}
+func (b *RegistryBatch) ConverterForPair(src, dst any, field string, fn ConverterFunc) {
+	st := reflect.TypeOf(src)
+	if st.Kind() == reflect.Ptr {
+		st = st.Elem()
+	}
+	dt := reflect.TypeOf(dst)
+	if dt.Kind() == reflect.Ptr {
+		dt = dt.Elem()
+	}
+	key := [2]reflect.Type{st, dt}
+	m := b.convPair[key]
+	if m == nil {
+		m = map[string]ConverterFunc{}
+		b.convPair[key] = m
+	}
+	m[field] = fn
+}
+func (b *RegistryBatch) GlobalValidator(field string, fn ValidatorFunc) { b.valGlobal[field] = fn }
+func (b *RegistryBatch) ValidatorFor(dst any, field string, fn ValidatorFunc) {
+	dt := reflect.TypeOf(dst)
+	if dt.Kind() == reflect.Ptr {
+		dt = dt.Elem()
+	}
+	m := b.valDst[dt]
+	if m == nil {
+		m = map[string]ValidatorFunc{}
+		b.valDst[dt] = m
+	}
+	m[field] = fn
+}
+func (b *RegistryBatch) ValidatorForPair(src, dst any, field string, fn ValidatorFunc) {
+	st := reflect.TypeOf(src)
+	if st.Kind() == reflect.Ptr {
+		st = st.Elem()
+	}
+	dt := reflect.TypeOf(dst)
+	if dt.Kind() == reflect.Ptr {
+		dt = dt.Elem()
+	}
+	key := [2]reflect.Type{st, dt}
+	m := b.valPair[key]
+	if m == nil {
+		m = map[string]ValidatorFunc{}
+		b.valPair[key] = m
+	}
+	m[field] = fn
+}
+
+// Generics helpers
+// Remove generic methods from Adapter; use top-level functions in generics.go instead.
+
+// Into performs adaptation from src -> dst; dst,src order for ergonomics
+func (a *Adapter) Into(dst, src interface{}) error {
 	if src == nil || dst == nil {
 		return fmt.Errorf("src and dst must not be nil")
 	}
@@ -418,9 +585,9 @@ func (a *Adapter) getOrBuildMetadata(typ reflect.Type) *structMetadata {
 		if fi.jsonName != "" {
 			meta.fieldsByJSONName[fi.jsonName] = fi
 		}
-	}
-	if ad, ok := meta.fieldsByName["AdditionalData"]; ok && ad.isAdditionalData {
-		meta.additionalDataField = ad
+		if fi.isAdditionalData && meta.additionalDataField == nil {
+			meta.additionalDataField = fi
+		}
 	}
 	actual, _ := a.metadataCache.LoadOrStore(typ, meta)
 	return actual.(*structMetadata)
@@ -492,7 +659,11 @@ func (a *Adapter) buildFieldMetadata(typ reflect.Type, meta *structMetadata, pre
 				jsonName = jt
 			}
 		}
-		isAD := f.Name == "AdditionalData" && (f.Type == reflect.TypeOf(null.JSON{}) || f.Type == reflect.TypeOf(boilertypes.JSON{}))
+		isAD := (adapterTag == "additional") || (f.Name == "AdditionalData")
+		if isAD {
+			// only mark as AdditionalData for supported JSON types
+			isAD = (f.Type == reflect.TypeOf(null.JSON{})) || (f.Type == reflect.TypeOf(boilertypes.JSON{}))
+		}
 		meta.fields = append(meta.fields, fieldInfo{index: idx, name: f.Name, jsonName: jsonName, typ: f.Type, canSet: true, isAdditionalData: isAD, ignore: ignore})
 	}
 }
@@ -764,4 +935,22 @@ func (a *Adapter) applyConverter(dstField reflect.Value, fn ConverterFunc, srcFi
 	}
 	dstField.Set(cv)
 	return nil
+}
+
+// WarmMetadata pre-builds metadata for provided example values or types.
+func (a *Adapter) WarmMetadata(examples ...any) {
+	for _, e := range examples {
+		if e == nil {
+			continue
+		}
+		// accept either value or pointer
+		t := reflect.TypeOf(e)
+		if t.Kind() == reflect.Ptr {
+			t = t.Elem()
+		}
+		if t.Kind() != reflect.Struct {
+			continue
+		}
+		_ = a.getOrBuildMetadata(t)
+	}
 }

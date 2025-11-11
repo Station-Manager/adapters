@@ -36,7 +36,7 @@ func TestAdapter_IgnoreTag(t *testing.T) {
 
 	dst := &DestWithIgnore{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	// Name and Email should be copied
@@ -75,7 +75,7 @@ func TestAdapter_DashIgnoreTag(t *testing.T) {
 
 	dst := &DestWithDashIgnore{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	// Name and Email should be copied
@@ -114,7 +114,7 @@ func TestAdapter_IgnoreNotInAdditionalData(t *testing.T) {
 
 	dst := &DestWithIgnoreAndAdditionalData{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	// Name should be copied directly
@@ -162,7 +162,7 @@ func TestAdapter_IgnoreDestinationField(t *testing.T) {
 
 	dst := &DestWithIgnoredFields{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	// Name and Email should be copied
@@ -203,7 +203,7 @@ func TestAdapter_IgnoreWithConverter(t *testing.T) {
 
 	dst := &DestWithIgnoreAndConverter{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	// Name and Email should be copied
@@ -244,7 +244,7 @@ func TestAdapter_MixedIgnoreFields(t *testing.T) {
 
 	dst := &DestMixed{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	// Public fields should be copied
@@ -289,7 +289,7 @@ func TestAdapter_IgnoreDoesNotAffectAdditionalDataUnmarshaling(t *testing.T) {
 
 	dst := &DestWithIgnoreFromAdditionalData{}
 
-	err = adapter.Adapt(src, dst)
+	err = adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	// Name should be copied

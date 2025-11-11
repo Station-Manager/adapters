@@ -34,7 +34,7 @@ func TestAdapter_BasicFieldCopy(t *testing.T) {
 
 	dst := &DestBasic{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, src.Name, dst.Name)
@@ -66,7 +66,7 @@ func TestAdapter_WithConverter(t *testing.T) {
 	src := &SourceWithConverter{Temperature: 25.7}
 	dst := &DestWithConverter{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, 25, dst.Temperature)
@@ -102,7 +102,7 @@ func TestAdapter_MarshalToAdditionalData(t *testing.T) {
 
 	dst := &DestWithAdditionalData{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Jane Doe", dst.Name)
@@ -159,7 +159,7 @@ func TestAdapter_UnmarshalFromAdditionalData(t *testing.T) {
 
 	dst := &DestExpanded{}
 
-	err = adapter.Adapt(src, dst)
+	err = adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Bob Smith", dst.Name)
@@ -189,7 +189,7 @@ func TestAdapter_DirectFieldsPrecedence(t *testing.T) {
 
 	dst := &DestBasic{}
 
-	err = adapter.Adapt(src, dst)
+	err = adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	// Direct fields should take precedence
@@ -243,7 +243,7 @@ func TestAdapter_ConverterWithAdditionalData(t *testing.T) {
 
 	dst := &DestWithBothConverterAndAdditional{}
 
-	err = adapter.Adapt(src, dst)
+	err = adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, 22, dst.Temperature)
@@ -256,14 +256,14 @@ func TestAdapter_ErrorCases(t *testing.T) {
 
 	t.Run("nil source", func(t *testing.T) {
 		dst := &DestBasic{}
-		err := adapter.Adapt(nil, dst)
+		err := adapter.Into(dst, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "must not be nil")
 	})
 
 	t.Run("nil destination", func(t *testing.T) {
 		src := &SourceBasic{}
-		err := adapter.Adapt(src, nil)
+		err := adapter.Into(nil, src)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "must not be nil")
 	})
@@ -271,7 +271,7 @@ func TestAdapter_ErrorCases(t *testing.T) {
 	t.Run("non-pointer source", func(t *testing.T) {
 		src := SourceBasic{}
 		dst := &DestBasic{}
-		err := adapter.Adapt(src, dst)
+		err := adapter.Into(dst, src)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "must be pointers")
 	})
@@ -279,7 +279,7 @@ func TestAdapter_ErrorCases(t *testing.T) {
 	t.Run("non-pointer destination", func(t *testing.T) {
 		src := &SourceBasic{}
 		dst := DestBasic{}
-		err := adapter.Adapt(src, dst)
+		err := adapter.Into(dst, src)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "must be pointers")
 	})
@@ -287,7 +287,7 @@ func TestAdapter_ErrorCases(t *testing.T) {
 	t.Run("non-struct source", func(t *testing.T) {
 		src := "not a struct"
 		dst := &DestBasic{}
-		err := adapter.Adapt(&src, dst)
+		err := adapter.Into(dst, &src)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "must point to structs")
 	})
@@ -304,7 +304,7 @@ func TestAdapter_ConverterError(t *testing.T) {
 	src := &SourceWithConverter{Temperature: 25.7}
 	dst := &DestWithConverter{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "conversion failed")
 }
@@ -332,7 +332,7 @@ func TestAdapter_PartialFieldMatch(t *testing.T) {
 
 	dst := &DestPartial{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Alice", dst.Name)
@@ -360,7 +360,7 @@ func TestAdapter_TypeConversion(t *testing.T) {
 
 	dst := &DestTyped{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, int64(42), dst.Count)
@@ -379,7 +379,7 @@ func TestAdapter_EmptyAdditionalData(t *testing.T) {
 
 	dst := &DestWithAdditionalData{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Test", dst.Name)
@@ -407,7 +407,7 @@ func TestAdapter_InvalidAdditionalData(t *testing.T) {
 
 	dst := &DestExpanded{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	// Should handle invalid JSON gracefully
 	assert.Error(t, err)
 }
@@ -430,7 +430,7 @@ func TestAdapter_NonJSONAdditionalData(t *testing.T) {
 
 	dst := &DestBasic{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Test", dst.Name)
@@ -457,7 +457,7 @@ func TestAdapter_ConcurrentAccess(t *testing.T) {
 		go func() {
 			src := &SourceBasic{Name: "Test", Age: 30, Email: "test@example.com"}
 			dst := &DestBasic{}
-			_ = adapter.Adapt(src, dst)
+			_ = adapter.Into(dst, src)
 			done <- true
 		}()
 	}
@@ -479,7 +479,7 @@ func TestAdapter_NullAdditionalData(t *testing.T) {
 
 	dst := &DestExpanded{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Test", dst.Name)
@@ -505,13 +505,13 @@ func TestAdapter_RoundTrip(t *testing.T) {
 
 	intermediate := &DestWithAdditionalData{}
 
-	err := adapter.Adapt(src1, intermediate)
+	err := adapter.Into(intermediate, src1)
 	require.NoError(t, err)
 
 	// Step 2: Adapt from compact back to expanded
 	dst := &DestExpanded{}
 
-	err = adapter.Adapt(intermediate, dst)
+	err = adapter.Into(dst, intermediate)
 	require.NoError(t, err)
 
 	// Verify all fields are preserved
@@ -543,7 +543,7 @@ func TestAdapter_NoRemainingFields(t *testing.T) {
 
 	dst := &DestWithAdditionalDataComplete{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Complete", dst.Name)
@@ -572,7 +572,7 @@ func TestAdapter_ConverterWrongType(t *testing.T) {
 
 	dst := &DestBasic{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	// Should fail because converter returns wrong type
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "converter returned type")
@@ -599,7 +599,7 @@ func TestAdapter_IncompatibleTypes(t *testing.T) {
 
 	dst := &DestIncompatible{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	// Name should be copied
@@ -631,7 +631,7 @@ func TestAdapter_ConverterErrorInAdditionalData(t *testing.T) {
 
 	dst := &DestExpanded{}
 
-	err = adapter.Adapt(src, dst)
+	err = adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	// Email should not be set due to converter error
@@ -662,7 +662,7 @@ func TestAdapter_ConverterIncompatibleTypeInAdditionalData(t *testing.T) {
 
 	dst := &DestExpanded{}
 
-	err = adapter.Adapt(src, dst)
+	err = adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	// Name and Age from direct fields should be set
@@ -708,7 +708,7 @@ func TestAdapter_EmbeddedFieldsToAdditionalData(t *testing.T) {
 
 	dst := &DestWithEmbeddedAdditionalData{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "John Smith", dst.Name)
@@ -762,7 +762,7 @@ func TestAdapter_MultipleEmbeddedFieldsToAdditionalData(t *testing.T) {
 
 	dst := &DestWithEmbeddedAdditionalData{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Jane Doe", dst.Name)

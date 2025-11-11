@@ -40,7 +40,7 @@ func TestAdapter_PointerEmbeddedStruct(t *testing.T) {
 
 	dst := &PersonDst{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Alice", dst.Name)
@@ -75,7 +75,7 @@ func TestAdapter_NilPointerEmbeddedStruct(t *testing.T) {
 
 	dst := &PersonDst{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Bob", dst.Name)
@@ -125,7 +125,7 @@ func TestAdapter_MultiplePointerEmbedded(t *testing.T) {
 
 	dst := &PersonDst{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Charlie", dst.Name)
@@ -167,7 +167,7 @@ func TestAdapter_MixedEmbeddedTypes(t *testing.T) {
 
 	dst := &PersonDst{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Diana", dst.Name)
@@ -204,7 +204,7 @@ func TestAdapter_PointerEmbeddedToAdditionalData(t *testing.T) {
 
 	dst := &PersonDst{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Eve", dst.Name)
@@ -254,7 +254,7 @@ func TestAdapter_AdditionalDataToPointerEmbedded(t *testing.T) {
 		Details: &Details{},
 	}
 
-	err = adapter.Adapt(src, dst)
+	err = adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Frank", dst.Name)
@@ -298,7 +298,7 @@ func TestAdapter_NestedPointerEmbedded(t *testing.T) {
 
 	dst := &PersonDst{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Grace", dst.Name)
@@ -342,7 +342,7 @@ func TestAdapter_PointerEmbeddedWithConverter(t *testing.T) {
 
 	dst := &RecordDst{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "TestRecord", dst.Name)
@@ -412,7 +412,7 @@ func TestAdapter_PartiallyNilPointerEmbedded(t *testing.T) {
 
 	dst := &PersonDst{}
 
-	err := adapter.Adapt(src, dst)
+	err := adapter.Into(dst, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Henry", dst.Name)
@@ -451,7 +451,7 @@ func TestAdapter_RoundTripPointerEmbeddedAdditionalData(t *testing.T) {
 	}
 
 	compact := &PersonCompact{}
-	err := adapter.Adapt(src, compact)
+	err := adapter.Into(compact, src)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Iris", compact.Name)
@@ -461,7 +461,7 @@ func TestAdapter_RoundTripPointerEmbeddedAdditionalData(t *testing.T) {
 	dst := &PersonFull{
 		Details: &Details{}, // Initialize pointer
 	}
-	err = adapter.Adapt(compact, dst)
+	err = adapter.Into(dst, compact)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Iris", dst.Name)

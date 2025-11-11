@@ -27,7 +27,7 @@ func TestValidator_DstScope_FromAdditionalData(t *testing.T) {
 	b, _ := json.Marshal(m)
 	s := S{AdditionalData: null.JSONFrom(b)}
 	d := D{}
-	err := a.Adapt(&s, &d)
+	err := a.Into(&d, &s)
 	assert.Error(t, err)
 }
 
@@ -44,7 +44,7 @@ func TestValidator_PairScope_FromAdditionalData(t *testing.T) {
 	})
 	s := S{Code: 50}
 	d := D{}
-	err := a.Adapt(&s, &d)
+	err := a.Into(&d, &s)
 	assert.Error(t, err)
 }
 
@@ -58,6 +58,6 @@ func TestCaseInsensitive_AdditionalData_WithJSONTags(t *testing.T) {
 	b, _ := json.Marshal(m)
 	s := S{AdditionalData: null.JSONFrom(b)}
 	d := D{}
-	require.NoError(t, a.Adapt(&s, &d))
+	require.NoError(t, a.Into(&d, &s))
 	assert.Equal(t, "Bob", d.First)
 }

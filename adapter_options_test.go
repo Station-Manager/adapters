@@ -25,7 +25,7 @@ func TestJSONTagMatching_Default(t *testing.T) {
 	a := New()
 	s := srcJSONTag{FirstName: "jane"}
 	d := dstJSONTag{}
-	require.NoError(t, a.Adapt(&s, &d))
+	require.NoError(t, a.Into(&d, &s))
 	assert.Equal(t, "jane", d.FirstName)
 }
 
@@ -42,7 +42,7 @@ func TestScopedConverters_Precedence(t *testing.T) {
 
 	sv := src{Name: "MiXeD"}
 	dv := dst{}
-	require.NoError(t, a.Adapt(&sv, &dv))
+	require.NoError(t, a.Into(&dv, &sv))
 	assert.Equal(t, "X", dv.Name)
 }
 
@@ -61,13 +61,13 @@ func TestAdditionalData_OverwritePolicy(t *testing.T) {
 	b, _ := json.Marshal(m)
 	s := S{Name: "Field", AdditionalData: null.JSONFrom(b)}
 	d := D{}
-	require.NoError(t, a.Adapt(&s, &d))
+	require.NoError(t, a.Into(&d, &s))
 	assert.Equal(t, "Field", d.Name)
 
 	// Now allow overwrite
 	a2 := NewWithOptions(WithOverwritePolicy(PreferAdditionalData))
 	d2 := D{}
-	require.NoError(t, a2.Adapt(&s, &d2))
+	require.NoError(t, a2.Into(&d2, &s))
 	assert.Equal(t, "AD", d2.Name)
 }
 
@@ -80,7 +80,7 @@ func TestIncludeZeroValues_InAdditionalData(t *testing.T) {
 	type D struct{ AdditionalData null.JSON }
 	s := S{} // N is zero => Should be included
 	d := D{}
-	require.NoError(t, a.Adapt(&s, &d))
+	require.NoError(t, a.Into(&d, &s))
 	var m map[string]any
 	require.NoError(t, json.Unmarshal(d.AdditionalData.JSON, &m))
 	_, ok := m["N"]
@@ -95,7 +95,7 @@ func TestCaseInsensitive_AdditionalData(t *testing.T) {
 	b, _ := json.Marshal(m)
 	s := S{AdditionalData: null.JSONFrom(b)}
 	d := D{}
-	require.NoError(t, a.Adapt(&s, &d))
+	require.NoError(t, a.Into(&d, &s))
 	assert.Equal(t, "bar", d.Foo)
 }
 
@@ -123,7 +123,7 @@ func TestValidators_AreApplied(t *testing.T) {
 	})
 	s := S{Name: "john"}
 	d := D{}
-	err := a.Adapt(&s, &d)
+	err := a.Into(&d, &s)
 	assert.Error(t, err)
 }
 
@@ -141,7 +141,7 @@ func TestDisableAdditionalDataOptions(t *testing.T) {
 	b, _ := json.Marshal(m)
 	s := S{Name: "Field", AdditionalData: null.JSONFrom(b)}
 	d := D{}
-	require.NoError(t, a.Adapt(&s, &d))
+	require.NoError(t, a.Into(&d, &s))
 	// Unmarshal disabled -> Name remains from field only
 	assert.Equal(t, "Field", d.Name)
 	// Marshal disabled -> AdditionalData remains zero
@@ -164,6 +164,6 @@ func TestBuilder_Basic(t *testing.T) {
 	type D struct{ Name string }
 	s := S{Name: "x"}
 	d := D{}
-	require.NoError(t, a.Adapt(&s, &d))
+	require.NoError(t, a.Into(&d, &s))
 	assert.Equal(t, "X", d.Name)
 }

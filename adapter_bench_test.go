@@ -85,7 +85,7 @@ func BenchmarkAdapter_BasicFieldCopy(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		dst := &BenchDest{}
-		_ = adapter.Adapt(dst, src)
+		_ = adapter.Into(dst, src)
 	}
 }
 
@@ -122,7 +122,7 @@ func BenchmarkAdapter_WithConverter(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		dst := &BenchDest{}
-		_ = adapter.Adapt(dst, src)
+		_ = adapter.Into(dst, src)
 	}
 }
 
@@ -150,7 +150,7 @@ func BenchmarkAdapter_MarshalToAdditionalData(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		dst := &BenchDestWithAdditional{}
-		_ = adapter.Adapt(dst, src)
+		_ = adapter.Into(dst, src)
 	}
 }
 
@@ -181,7 +181,7 @@ func BenchmarkAdapter_UnmarshalFromAdditionalData(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		dst := &BenchDestWithAdditional{}
-		_ = adapter.Adapt(dst, src)
+		_ = adapter.Into(dst, src)
 	}
 }
 
@@ -210,11 +210,11 @@ func BenchmarkAdapter_RoundTrip(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		// Step 1: Marshal to AdditionalData
 		intermediate := &BenchDestWithAdditional{}
-		_ = adapter.Adapt(intermediate, src)
+		_ = adapter.Into(intermediate, src)
 
 		// Step 2: Unmarshal from AdditionalData
 		dst := &BenchDest{}
-		_ = adapter.Adapt(dst, intermediate)
+		_ = adapter.Into(dst, intermediate)
 	}
 }
 
@@ -243,7 +243,7 @@ func BenchmarkAdapter_Concurrent(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			dst := &BenchDest{}
-			_ = adapter.Adapt(dst, src)
+			_ = adapter.Into(dst, src)
 		}
 	})
 }
@@ -297,7 +297,7 @@ func BenchmarkAdapter_WithMultipleConverters(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		dst := &BenchDest{}
-		_ = adapter.Adapt(dst, src)
+		_ = adapter.Into(dst, src)
 	}
 }
 
@@ -322,7 +322,7 @@ func BenchmarkAdapter_SmallStruct(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		dst := &SmallDest{}
-		_ = adapter.Adapt(dst, src)
+		_ = adapter.Into(dst, src)
 	}
 }
 
@@ -366,6 +366,6 @@ func BenchmarkAdapter_LargeStruct(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		dst := &LargeDest{}
-		_ = adapter.Adapt(dst, src)
+		_ = adapter.Into(dst, src)
 	}
 }

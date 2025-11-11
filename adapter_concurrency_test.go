@@ -94,7 +94,7 @@ func TestRegisterConverter_ConcurrentReadWrite(t *testing.T) {
 			start.Wait()
 			for i := 0; i < 200; i++ {
 				d := dstRecord{}
-				require.NoError(t, ad.Adapt(&s, &d))
+				require.NoError(t, ad.Into(&d, &s))
 				// Name must be uppercased, other fields intact
 				assert.Equal(t, actualUpper(s.Name), d.Name)
 				assert.Equal(t, s.ID, d.ID)
@@ -111,7 +111,7 @@ func TestRegisterConverter_ConcurrentReadWrite(t *testing.T) {
 
 	// After registration activity, ensure converters still effective
 	dst := dstRecord{}
-	require.NoError(t, ad.Adapt(&s, &dst))
+	require.NoError(t, ad.Into(&dst, &s))
 	assert.Equal(t, actualUpper(s.Name), dst.Name)
 }
 
@@ -143,7 +143,7 @@ func TestMetadataCache_And_AdditionalData_Concurrent(t *testing.T) {
 				b, _ := json.Marshal(alias)
 				s := srcRecord{ID: k*100 + i, Name: "x", Note: "n", AdditionalData: null.JSONFrom(b)}
 				d := dstRecord{}
-				require.NoError(t, ad.Adapt(&s, &d))
+				require.NoError(t, ad.Into(&d, &s))
 				// verify fields
 				if d.Name != actualUpper("x") || d.Alias != "a" || d.ID != s.ID || d.Note != s.Note {
 					t.Fatalf("unexpected adapt result: %#v from %#v", d, s)
