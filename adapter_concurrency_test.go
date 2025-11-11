@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"encoding/json"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -73,6 +74,8 @@ func TestRegisterConverter_ConcurrentReadWrite(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(readers + 1)
 
+	errs := make(chan string, readers*4)
+
 	// Writer goroutine: continuously registering new converters while readers adapt
 	go func() {
 		defer wg.Done()
@@ -94,13 +97,26 @@ func TestRegisterConverter_ConcurrentReadWrite(t *testing.T) {
 			start.Wait()
 			for i := 0; i < 200; i++ {
 				d := dstRecord{}
-				require.NoError(t, ad.Into(&d, &s))
-				// Name must be uppercased, other fields intact
-				assert.Equal(t, actualUpper(s.Name), d.Name)
-				assert.Equal(t, s.ID, d.ID)
-				assert.Equal(t, s.Note, d.Note)
-				// Alias populated from AdditionalData
-				assert.Equal(t, "nick", d.Alias)
+				if err := ad.Into(&d, &s); err != nil {
+					errs <- fmt.Sprintf("adapt error: %v", err)
+					return
+				}
+				if d.Name != actualUpper(s.Name) {
+					errs <- fmt.Sprintf("name not uppercased: got %q", d.Name)
+					return
+				}
+				if d.ID != s.ID {
+					errs <- fmt.Sprintf("id mismatch: got %d want %d", d.ID, s.ID)
+					return
+				}
+				if d.Note != s.Note {
+					errs <- fmt.Sprintf("note mismatch: got %q want %q", d.Note, s.Note)
+					return
+				}
+				if d.Alias != "nick" {
+					errs <- fmt.Sprintf("alias mismatch: got %q want %q", d.Alias, "nick")
+					return
+				}
 			}
 		}()
 	}
@@ -108,6 +124,11 @@ func TestRegisterConverter_ConcurrentReadWrite(t *testing.T) {
 	start.Done()
 	wg.Wait()
 	done.Store(1)
+	close(errs)
+	for msg := range errs {
+		// report first error and abort to keep logs concise
+		t.Fatalf("concurrent adapt failed: %s", msg)
+	}
 
 	// After registration activity, ensure converters still effective
 	dst := dstRecord{}
@@ -134,6 +155,8 @@ func TestMetadataCache_And_AdditionalData_Concurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(types)
 
+	errCh := make(chan string, types*2)
+
 	for k := 0; k < types; k++ {
 		k := k
 		go func() {
@@ -143,10 +166,13 @@ func TestMetadataCache_And_AdditionalData_Concurrent(t *testing.T) {
 				b, _ := json.Marshal(alias)
 				s := srcRecord{ID: k*100 + i, Name: "x", Note: "n", AdditionalData: null.JSONFrom(b)}
 				d := dstRecord{}
-				require.NoError(t, ad.Into(&d, &s))
-				// verify fields
-				if d.Name != actualUpper("x") || d.Alias != "a" || d.ID != s.ID || d.Note != s.Note {
-					t.Fatalf("unexpected adapt result: %#v from %#v", d, s)
+				if err := ad.Into(&d, &s); err != nil {
+					errCh <- fmt.Sprintf("adapt error: %v", err)
+					return
+				}
+				if !(d.Name == actualUpper("x") && d.Alias == "a" && d.ID == s.ID && d.Note == s.Note) {
+					errCh <- fmt.Sprintf("unexpected adapt result: %#v from %#v", d, s)
+					return
 				}
 			}
 		}()
@@ -160,7 +186,13 @@ func TestMetadataCache_And_AdditionalData_Concurrent(t *testing.T) {
 
 	select {
 	case <-done:
-		// ok
+		close(errCh)
+		if len(errCh) > 0 {
+			for msg := range errCh {
+				t.Errorf("concurrent metadata/adapt error: %s", msg)
+			}
+			t.FailNow()
+		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("timeout waiting for concurrent metadata cache test")
 	}

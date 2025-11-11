@@ -3,6 +3,7 @@ package adapters
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -114,6 +115,7 @@ func TestValidators_ConcurrentRegistrationAndAdapt(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(adaptations + 1)
 	var done atomic.Bool
+	errCh := make(chan string, adaptations*2)
 
 	// writer continuously swaps validators
 	go func() {
@@ -144,12 +146,13 @@ func TestValidators_ConcurrentRegistrationAndAdapt(t *testing.T) {
 			for i := 0; i < 200; i++ {
 				s := S{V: i}
 				d := D{}
-				err := a.Into(&d, &s)
-				if err != nil {
-					t.Fatalf("unexpected validator error: %v", err)
+				if err := a.Into(&d, &s); err != nil {
+					errCh <- fmt.Sprintf("unexpected validator error: %v", err)
+					return
 				}
 				if d.V != i {
-					t.Fatalf("value mismatch %d != %d", d.V, i)
+					errCh <- fmt.Sprintf("value mismatch %d != %d", d.V, i)
+					return
 				}
 			}
 		}()
@@ -157,6 +160,10 @@ func TestValidators_ConcurrentRegistrationAndAdapt(t *testing.T) {
 	start.Done()
 	wg.Wait()
 	done.Store(true)
+	close(errCh)
+	for msg := range errCh {
+		t.Fatalf("validators concurrency error: %s", msg)
+	}
 }
 
 // Case-insensitive lookup with both field name and JSON tag conflict
