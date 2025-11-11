@@ -113,6 +113,26 @@ type structMetadata struct {
 	additionalDataField   *fieldInfo
 }
 
+type fieldPlan struct {
+	_dstIndex []int
+	_srcIndex []int
+	_srcName  string
+	_dstName  string
+	conv      ConverterFunc
+	val       ValidatorFunc
+}
+
+type buildPlan struct {
+	gen        uint64
+	srcType    reflect.Type
+	dstType    reflect.Type
+	fields     []fieldPlan
+	srcHasAD   bool
+	dstHasAD   bool
+	srcADIndex []int
+	dstADIndex []int
+}
+
 // Adapter performs struct adaptation with optional converters & AdditionalData handling.
 // See README for usage and option guidelines.
 type Adapter struct {
@@ -122,6 +142,7 @@ type Adapter struct {
 	boolMapPool   sync.Pool    // Pool for map[string]bool reuse
 	options       Options
 	gen           atomic.Uint64 // increments on registry changes for plan invalidation
+	planCache     sync.Map      // key: [2]reflect.Type -> *buildPlan (validated against gen)
 }
 
 // New creates an Adapter with default options.
@@ -685,9 +706,10 @@ func (a *Adapter) buildFieldMetadata(typ reflect.Type, meta *structMetadata, pre
 func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 	dt := dstVal.Type()
 	st := srcVal.Type()
+	plan := a.getPlan(st, dt)
 	dstMeta := a.getOrBuildMetadata(dt)
 	srcMeta := a.getOrBuildMetadata(st)
-	hasAD := srcMeta.additionalDataField != nil || dstMeta.additionalDataField != nil
+	hasAD := plan.srcHasAD || plan.dstHasAD
 	var processed, dstSet map[string]bool
 	if hasAD {
 		capHint := len(srcMeta.fields)
@@ -698,48 +720,48 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 		dstSet = a.getBoolMap(capHint)
 		defer func() { a.putBoolMap(processed); a.putBoolMap(dstSet) }()
 	}
-	for i := range dstMeta.fields {
-		df := &dstMeta.fields[i]
-		if !df.canSet || df.isAdditionalData || df.ignore {
-			continue
-		}
-		sf, found := srcMeta.fieldsByName[df.name]
-		if !found && df.jsonName != "" {
-			sf, found = srcMeta.fieldsByJSONName[df.jsonName]
-		}
-		if !found {
-			continue
-		}
-		if sf.isAdditionalData || sf.ignore {
-			if hasAD {
-				processed[sf.name] = true
-			}
-			continue
-		}
-		srcField, ok := a.safeFieldByIndex(srcVal, sf.index)
+	for i := range plan.fields {
+		fp := &plan.fields[i]
+		srcField, ok := a.safeFieldByIndex(srcVal, fp._srcIndex)
 		if !ok {
 			continue
 		}
-		dstField := dstVal.FieldByIndex(df.index)
-		if err := a.adaptField(dstField, srcField, df.name, st, dt); err != nil {
-			return fmt.Errorf("adapting field %s: %w", df.name, err)
+		dstField := dstVal.FieldByIndex(fp._dstIndex)
+		// Apply converter or direct assignment
+		if fp.conv != nil {
+			if err := a.applyConverter(dstField, fp.conv, srcField, fp._dstName); err != nil {
+				return fmt.Errorf("adapting field %s: %w", fp._dstName, err)
+			}
+		} else {
+			srcType := srcField.Type()
+			dstType := dstField.Type()
+			if srcType == dstType || srcType.AssignableTo(dstType) {
+				dstField.Set(srcField)
+			} else if srcType.ConvertibleTo(dstType) {
+				dstField.Set(srcField.Convert(dstType))
+			} else {
+				// skip incompatible types (match previous behavior)
+			}
+		}
+		// Validator
+		if fp.val != nil {
+			if err := fp.val(dstField.Interface()); err != nil {
+				return err
+			}
 		}
 		if hasAD {
-			processed[sf.name] = true
-			dstSet[df.name] = true
+			processed[fp._srcName] = true
+			dstSet[fp._dstName] = true
 		}
 	}
-	if srcMeta.additionalDataField != nil && !a.options.DisableUnmarshalAdditionalData {
-		srcAD := srcVal.FieldByIndex(srcMeta.additionalDataField.index)
+	if plan.srcHasAD && !a.options.DisableUnmarshalAdditionalData {
+		srcAD := srcVal.FieldByIndex(plan.srcADIndex)
 		if err := a.unmarshalAdditionalData(dstVal, dstMeta, srcAD, dstSet); err != nil {
 			return fmt.Errorf("unmarshaling AdditionalData: %w", err)
 		}
-		if hasAD {
-			processed["AdditionalData"] = true
-		}
 	}
-	if dstMeta.additionalDataField != nil && !a.options.DisableMarshalAdditionalData {
-		dstAD := dstVal.FieldByIndex(dstMeta.additionalDataField.index)
+	if plan.dstHasAD && !a.options.DisableMarshalAdditionalData {
+		dstAD := dstVal.FieldByIndex(plan.dstADIndex)
 		if err := a.marshalRemainingFields(dstAD, srcVal, st, processed); err != nil {
 			return fmt.Errorf("marshaling remaining fields to AdditionalData: %w", err)
 		}
@@ -747,56 +769,117 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 	return nil
 }
 
-func (a *Adapter) adaptField(dstField, srcField reflect.Value, fieldName string, srcRoot, dstRoot reflect.Type) error {
-	if !dstField.CanSet() {
-		return fmt.Errorf("cannot set field %s (unexported or unsettable)", fieldName)
+func (a *Adapter) getPlan(st, dt reflect.Type) *buildPlan {
+	key := [2]reflect.Type{st, dt}
+	if v, ok := a.planCache.Load(key); ok {
+		p := v.(*buildPlan)
+		if p.gen == a.gen.Load() {
+			return p
+		}
 	}
+	p := a.buildPlan(st, dt)
+	a.planCache.Store(key, p)
+	return p
+}
+
+func (a *Adapter) buildPlan(st, dt reflect.Type) *buildPlan {
+	p := &buildPlan{gen: a.gen.Load(), srcType: st, dstType: dt}
+	srcMeta := a.getOrBuildMetadata(st)
+	dstMeta := a.getOrBuildMetadata(dt)
 	reg := a.converters.Load().(*converterRegistry)
-	// precedence pair > dst > global for converters
-	if fn := reg.byPair[[2]reflect.Type{srcRoot, dstRoot}][fieldName]; fn != nil {
-		if err := a.applyConverter(dstField, fn, srcField, fieldName); err != nil {
-			return err
+	vreg := a.validators.Load().(*validatorRegistry)
+
+	p.srcHasAD = srcMeta.additionalDataField != nil
+	p.dstHasAD = dstMeta.additionalDataField != nil
+	if srcMeta.additionalDataField != nil {
+		p.srcADIndex = srcMeta.additionalDataField.index
+	}
+	if dstMeta.additionalDataField != nil {
+		p.dstADIndex = dstMeta.additionalDataField.index
+	}
+
+	// Pre-resolve field mappings and converter/validator per precedence
+	for i := range dstMeta.fields {
+		df := &dstMeta.fields[i]
+		if !df.canSet || df.isAdditionalData || df.ignore {
+			continue
 		}
-		return a.runValidators(dstField, fieldName, srcRoot, dstRoot)
-	}
-	if fn := reg.byDst[dstRoot][fieldName]; fn != nil {
-		if err := a.applyConverter(dstField, fn, srcField, fieldName); err != nil {
-			return err
+		// Find matching source field by name or json tag
+		sf, found := srcMeta.fieldsByName[df.name]
+		if !found && df.jsonName != "" {
+			sf, found = srcMeta.fieldsByJSONName[df.jsonName]
 		}
-		return a.runValidators(dstField, fieldName, srcRoot, dstRoot)
-	}
-	if fn := reg.global[fieldName]; fn != nil {
-		if err := a.applyConverter(dstField, fn, srcField, fieldName); err != nil {
-			return err
+		if !found || sf.isAdditionalData || sf.ignore {
+			continue
 		}
-		return a.runValidators(dstField, fieldName, srcRoot, dstRoot)
+		// Resolve converter precedence: pair > dst > global
+		var conv ConverterFunc
+		if m := reg.byPair[[2]reflect.Type{st, dt}]; m != nil {
+			conv = m[df.name]
+		}
+		if conv == nil {
+			if m := reg.byDst[dt]; m != nil {
+				conv = m[df.name]
+			}
+		}
+		if conv == nil {
+			conv = reg.global[df.name]
+		}
+		// Resolve validator precedence in same order
+		var val ValidatorFunc
+		if m := vreg.byPair[[2]reflect.Type{st, dt}]; m != nil {
+			val = m[df.name]
+		}
+		if val == nil {
+			if m := vreg.byDst[dt]; m != nil {
+				val = m[df.name]
+			}
+		}
+		if val == nil {
+			val = vreg.global[df.name]
+		}
+		p.fields = append(p.fields, fieldPlan{_dstIndex: df.index, _srcIndex: sf.index, _srcName: sf.name, _dstName: df.name, conv: conv, val: val})
 	}
-	// direct copy logic
-	srcType := srcField.Type()
-	dstType := dstField.Type()
-	if srcType == dstType || srcType.AssignableTo(dstType) {
-		dstField.Set(srcField)
-		return a.runValidators(dstField, fieldName, srcRoot, dstRoot)
+	return p
+}
+
+// --- converter/validator application ---
+func (a *Adapter) applyConverter(dstField reflect.Value, fn ConverterFunc, srcField reflect.Value, fieldName string) error {
+	converted, err := fn(srcField.Interface())
+	if err != nil {
+		return err
 	}
-	if srcType.ConvertibleTo(dstType) {
-		dstField.Set(srcField.Convert(dstType))
-		return a.runValidators(dstField, fieldName, srcRoot, dstRoot)
+	if converted == nil {
+		dstField.Set(reflect.Zero(dstField.Type()))
+		return nil
 	}
+	cv := reflect.ValueOf(converted)
+	if !cv.IsValid() {
+		return fmt.Errorf("converter returned invalid value for field %s", fieldName)
+	}
+	if !cv.Type().AssignableTo(dstField.Type()) {
+		return fmt.Errorf("converter returned type %s, expected %s", cv.Type(), dstField.Type())
+	}
+	dstField.Set(cv)
 	return nil
 }
 
-func (a *Adapter) runValidators(dstField reflect.Value, fieldName string, srcRoot, dstRoot reflect.Type) error {
-	vreg := a.validators.Load().(*validatorRegistry)
-	if fn := vreg.byPair[[2]reflect.Type{srcRoot, dstRoot}][fieldName]; fn != nil {
-		return fn(dstField.Interface())
+// WarmMetadata pre-builds metadata for provided example values or types.
+func (a *Adapter) WarmMetadata(examples ...any) {
+	for _, e := range examples {
+		if e == nil {
+			continue
+		}
+		// accept either value or pointer
+		t := reflect.TypeOf(e)
+		if t.Kind() == reflect.Ptr {
+			t = t.Elem()
+		}
+		if t.Kind() != reflect.Struct {
+			continue
+		}
+		_ = a.getOrBuildMetadata(t)
 	}
-	if fn := vreg.byDst[dstRoot][fieldName]; fn != nil {
-		return fn(dstField.Interface())
-	}
-	if fn := vreg.global[fieldName]; fn != nil {
-		return fn(dstField.Interface())
-	}
-	return nil
 }
 
 func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, dstMeta *structMetadata, srcAdditionalData reflect.Value, dstFieldsSet map[string]bool) error {
@@ -924,40 +1007,17 @@ func (a *Adapter) marshalRemainingFields(dstAdditionalData reflect.Value, srcVal
 	return nil
 }
 
-func (a *Adapter) applyConverter(dstField reflect.Value, fn ConverterFunc, srcField reflect.Value, fieldName string) error {
-	converted, err := fn(srcField.Interface())
-	if err != nil {
-		return err
+// --- validators ---
+func (a *Adapter) runValidators(dstField reflect.Value, fieldName string, srcRoot, dstRoot reflect.Type) error {
+	vreg := a.validators.Load().(*validatorRegistry)
+	if fn := vreg.byPair[[2]reflect.Type{srcRoot, dstRoot}][fieldName]; fn != nil {
+		return fn(dstField.Interface())
 	}
-	if converted == nil {
-		dstField.Set(reflect.Zero(dstField.Type()))
-		return nil
+	if fn := vreg.byDst[dstRoot][fieldName]; fn != nil {
+		return fn(dstField.Interface())
 	}
-	cv := reflect.ValueOf(converted)
-	if !cv.IsValid() {
-		return fmt.Errorf("converter returned invalid value for field %s", fieldName)
+	if fn := vreg.global[fieldName]; fn != nil {
+		return fn(dstField.Interface())
 	}
-	if !cv.Type().AssignableTo(dstField.Type()) {
-		return fmt.Errorf("converter returned type %s, expected %s", cv.Type(), dstField.Type())
-	}
-	dstField.Set(cv)
 	return nil
-}
-
-// WarmMetadata pre-builds metadata for provided example values or types.
-func (a *Adapter) WarmMetadata(examples ...any) {
-	for _, e := range examples {
-		if e == nil {
-			continue
-		}
-		// accept either value or pointer
-		t := reflect.TypeOf(e)
-		if t.Kind() == reflect.Ptr {
-			t = t.Elem()
-		}
-		if t.Kind() != reflect.Struct {
-			continue
-		}
-		_ = a.getOrBuildMetadata(t)
-	}
 }
