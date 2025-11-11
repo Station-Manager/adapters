@@ -105,10 +105,12 @@ type fieldInfo struct {
 }
 
 type structMetadata struct {
-	fields              []fieldInfo
-	fieldsByName        map[string]*fieldInfo
-	fieldsByJSONName    map[string]*fieldInfo
-	additionalDataField *fieldInfo
+	fields                []fieldInfo
+	fieldsByName          map[string]*fieldInfo
+	fieldsByJSONName      map[string]*fieldInfo
+	fieldsByLowerName     map[string]*fieldInfo
+	fieldsByLowerJSONName map[string]*fieldInfo
+	additionalDataField   *fieldInfo
 }
 
 // Adapter performs struct adaptation with optional converters & AdditionalData handling.
@@ -577,13 +579,24 @@ func (a *Adapter) getOrBuildMetadata(typ reflect.Type) *structMetadata {
 		return cached.(*structMetadata)
 	}
 	fc := a.countFields(typ)
-	meta := &structMetadata{fields: make([]fieldInfo, 0, fc), fieldsByName: make(map[string]*fieldInfo, fc), fieldsByJSONName: make(map[string]*fieldInfo, fc)}
+	meta := &structMetadata{
+		fields:                make([]fieldInfo, 0, fc),
+		fieldsByName:          make(map[string]*fieldInfo, fc),
+		fieldsByJSONName:      make(map[string]*fieldInfo, fc),
+		fieldsByLowerName:     make(map[string]*fieldInfo, fc),
+		fieldsByLowerJSONName: make(map[string]*fieldInfo, fc),
+	}
 	a.buildFieldMetadata(typ, meta, nil)
 	for i := range meta.fields {
 		fi := &meta.fields[i]
 		meta.fieldsByName[fi.name] = fi
 		if fi.jsonName != "" {
 			meta.fieldsByJSONName[fi.jsonName] = fi
+		}
+		// precompute lowercase maps for fast case-insensitive lookups
+		meta.fieldsByLowerName[strings.ToLower(fi.name)] = fi
+		if fi.jsonName != "" {
+			meta.fieldsByLowerJSONName[strings.ToLower(fi.jsonName)] = fi
 		}
 		if fi.isAdditionalData && meta.additionalDataField == nil {
 			meta.additionalDataField = fi
@@ -818,21 +831,11 @@ func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, dstMeta *structM
 			return nil, false, ""
 		}
 		lk := strings.ToLower(key)
-		if fi, ok := dstMeta.fieldsByName[key]; ok {
+		if fi, ok := dstMeta.fieldsByLowerName[lk]; ok {
 			return fi, true, fi.name
 		}
-		if fi, ok := dstMeta.fieldsByJSONName[key]; ok {
+		if fi, ok := dstMeta.fieldsByLowerJSONName[lk]; ok {
 			return fi, true, fi.name
-		}
-		for n, fi := range dstMeta.fieldsByName {
-			if strings.ToLower(n) == lk {
-				return fi, true, fi.name
-			}
-		}
-		for jn, fi := range dstMeta.fieldsByJSONName {
-			if strings.ToLower(jn) == lk {
-				return fi, true, fi.name
-			}
 		}
 		return nil, false, ""
 	}
@@ -877,7 +880,7 @@ func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, dstMeta *structM
 }
 
 func (a *Adapter) marshalRemainingFields(dstAdditionalData reflect.Value, srcVal reflect.Value, srcType reflect.Type, processed map[string]bool) error {
-	remaining := make(map[string]interface{})
+	var remaining map[string]interface{}
 	srcMeta := a.getOrBuildMetadata(srcType)
 	for i := range srcMeta.fields {
 		sf := &srcMeta.fields[i]
@@ -894,25 +897,29 @@ func (a *Adapter) marshalRemainingFields(dstAdditionalData reflect.Value, srcVal
 		if !a.options.IncludeZeroValues && srcField.IsZero() {
 			continue
 		}
+		if remaining == nil {
+			remaining = make(map[string]interface{})
+		}
 		remaining[sf.name] = srcField.Interface()
+	}
+	t := dstAdditionalData.Type()
+	if remaining == nil || len(remaining) == 0 {
+		// set zero values without allocating/marshaling
+		if t == reflect.TypeOf(null.JSON{}) {
+			dstAdditionalData.Set(reflect.ValueOf(null.JSON{}))
+		} else if t == reflect.TypeOf(boilertypes.JSON{}) {
+			dstAdditionalData.Set(reflect.ValueOf(boilertypes.JSON(nil)))
+		}
+		return nil
 	}
 	bytes, err := json.Marshal(remaining)
 	if err != nil {
 		return err
 	}
-	t := dstAdditionalData.Type()
 	if t == reflect.TypeOf(null.JSON{}) {
-		if len(remaining) == 0 {
-			dstAdditionalData.Set(reflect.ValueOf(null.JSON{}))
-		} else {
-			dstAdditionalData.Set(reflect.ValueOf(null.JSONFrom(bytes)))
-		}
+		dstAdditionalData.Set(reflect.ValueOf(null.JSONFrom(bytes)))
 	} else if t == reflect.TypeOf(boilertypes.JSON{}) {
-		if len(remaining) == 0 {
-			dstAdditionalData.Set(reflect.ValueOf(boilertypes.JSON(nil)))
-		} else {
-			dstAdditionalData.Set(reflect.ValueOf(boilertypes.JSON(bytes)))
-		}
+		dstAdditionalData.Set(reflect.ValueOf(boilertypes.JSON(bytes)))
 	}
 	return nil
 }

@@ -19,6 +19,38 @@ A high-performance, thread-safe Go library for struct-to-struct field adaptation
 go get github.com/Station-Manager/adapters
 ```
 
+## API
+
+- Core: `Into(dst, src) error` copies from src struct to dst struct. Both must be pointers to structs.
+- Generics helpers:
+  - `Copy[T any](a *Adapter, dst *T, src any) error`
+  - `AdaptTo[T any](a *Adapter, src any) (*T, error)`
+  - `Make[T any](a *Adapter, src any) (T, error)`
+- Registration:
+  - Converters: `RegisterConverter`, `RegisterConverterFor`, `RegisterConverterForPair`
+  - Validators: `RegisterValidator`, `RegisterValidatorFor`, `RegisterValidatorForPair`
+  - Batch: `Batch(func(*RegistryBatch))` to group registrations
+
+### Tags
+
+- Prefer `json:"name"` tags for field name matching.
+- `adapter:"ignore"` skips a field.
+- `adapter:"additional"` marks a field of type `null.JSON` or `sqlboiler/types.JSON` as AdditionalData.
+
+### AdditionalData semantics
+
+- Direct fields win by default (PreferFields). Switch to `PreferAdditionalData` via `WithOverwritePolicy`.
+- Case-insensitive key matching is opt-in: `WithCaseInsensitiveAdditionalData(true)`.
+- Control marshaling/unmarshaling with `WithDisableMarshalAdditionalData` and `WithDisableUnmarshalAdditionalData`.
+
+## Performance
+
+- Metadata is cached; call `WarmMetadata(samples...)` to prebuild for hot types.
+- Case-insensitive matching uses precomputed lowercase maps to avoid per-key scans.
+- AdditionalData map is lazily allocated when needed to reduce allocations.
+
+See `PROFILING.md` for profiling commands and tuning notes.
+
 ## Quick Start
 
 ```go
