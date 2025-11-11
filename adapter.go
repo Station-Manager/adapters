@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/goccy/go-json"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -15,74 +16,220 @@ import (
 // It is registered by field name and applies to any source/destination struct pair.
 type ConverterFunc func(src interface{}) (interface{}, error)
 
+// Composition helpers
+// ComposeConverters chains multiple ConverterFunc instances left-to-right.
+// If any converter returns an error it aborts.
+// Nil output propagates immediately.
+func ComposeConverters(fns ...ConverterFunc) ConverterFunc {
+	return func(src interface{}) (interface{}, error) {
+		cur := src
+		for _, fn := range fns {
+			out, err := fn(cur)
+			if err != nil {
+				return nil, err
+			}
+			if out == nil {
+				return nil, nil
+			}
+			cur = out
+		}
+		return cur, nil
+	}
+}
+
+// MapString returns a ConverterFunc applying f when src is a string; otherwise returns src unchanged.
+func MapString(f func(string) string) ConverterFunc {
+	return func(src interface{}) (interface{}, error) {
+		if s, ok := src.(string); ok {
+			return f(s), nil
+		}
+		return src, nil
+	}
+}
+
+// OverwritePolicy controls how AdditionalData values interact with already-set fields
+type OverwritePolicy int
+
+const (
+	PreferFields         OverwritePolicy = iota // default: do not overwrite fields set from direct mapping
+	PreferAdditionalData                        // overwrite fields with values from AdditionalData if present
+)
+
+type Options struct {
+	IncludeZeroValues             bool            // when true, include zero-valued fields in marshaled AdditionalData
+	CaseInsensitiveAdditionalData bool            // when true, AdditionalData keys are matched case-insensitively
+	OverwritePolicy               OverwritePolicy // controls if AdditionalData overwrites direct fields
+}
+
+type Option func(*Options)
+
+func WithIncludeZeroValues(v bool) Option { return func(o *Options) { o.IncludeZeroValues = v } }
+func WithCaseInsensitiveAdditionalData(v bool) Option {
+	return func(o *Options) { o.CaseInsensitiveAdditionalData = v }
+}
+func WithOverwritePolicy(p OverwritePolicy) Option { return func(o *Options) { o.OverwritePolicy = p } }
+
+// converterRegistry stores converters at multiple scopes and is swapped atomically (copy-on-write)
+type converterRegistry struct {
+	global map[string]ConverterFunc
+	byDst  map[reflect.Type]map[string]ConverterFunc
+	byPair map[[2]reflect.Type]map[string]ConverterFunc // [srcType, dstType]
+}
+
 type fieldInfo struct {
 	index            []int
 	name             string
+	jsonName         string
 	typ              reflect.Type
 	canSet           bool
 	isAdditionalData bool
-	ignore           bool // Set to true if field has `adapter:"ignore"` or `adapter:"-"` tag
+	ignore           bool
 }
 
 type structMetadata struct {
 	fields              []fieldInfo
 	fieldsByName        map[string]*fieldInfo
-	additionalDataField *fieldInfo // Cached AdditionalData field info, nil if not present
+	fieldsByJSONName    map[string]*fieldInfo
+	additionalDataField *fieldInfo
 }
 
-// Adapter manages field conversions and performs struct-to-struct adaptation
-// with special handling for AdditionalData fields of type null.JSON from github.com/aarondl/null/v8.
-//
-// Fields can be excluded from adaptation using struct tags:
-//   - `adapter:"ignore"` - Skip this field during adaptation
-//   - `adapter:"-"`      - Skip this field during adaptation (alternative syntax)
+// Adapter performs struct adaptation with optional converters & AdditionalData handling.
+// See README for usage and option guidelines.
 type Adapter struct {
-	//	mu            sync.RWMutex
-	//	converters    map[string]ConverterFunc // Maps field name -> converter function
-	converters    atomic.Value
-	metadataCache sync.Map  // map[reflect.Type]*structMetadata
-	boolMapPool   sync.Pool // Pool for map[string]bool reuse
+	converters    atomic.Value // holds *converterRegistry
+	metadataCache sync.Map     // map[reflect.Type]*structMetadata
+	boolMapPool   sync.Pool    // Pool for map[string]bool reuse
+	options       Options
 }
 
-// New creates a new Adapter instance
-func New() *Adapter {
+// New creates an Adapter with default options.
+func New() *Adapter { return NewWithOptions() }
+
+// NewWithOptions creates a new Adapter with provided options.
+func NewWithOptions(opts ...Option) *Adapter {
 	a := &Adapter{}
-	a.converters.Store(make(map[string]ConverterFunc))
-	a.boolMapPool = sync.Pool{
-		New: func() interface{} {
-			// Return nil so getBoolMap can distinguish between fresh and reused maps
-			return (map[string]bool)(nil)
-		},
+	optsState := Options{IncludeZeroValues: false, CaseInsensitiveAdditionalData: false, OverwritePolicy: PreferFields}
+	for _, f := range opts {
+		f(&optsState)
 	}
+	a.options = optsState
+	reg := &converterRegistry{global: make(map[string]ConverterFunc), byDst: make(map[reflect.Type]map[string]ConverterFunc), byPair: make(map[[2]reflect.Type]map[string]ConverterFunc)}
+	a.converters.Store(reg)
+	a.boolMapPool = sync.Pool{New: func() interface{} { return (map[string]bool)(nil) }}
 	return a
 }
 
-// RegisterConverter registers a converter function for a specific field name.
-// The converter will be applied to any field with this name during adaptation.
+// RegisterConverter adds a global field converter (applies to any src/dst containing fieldName).
 func (a *Adapter) RegisterConverter(fieldName string, fn ConverterFunc) {
-	// Copy-on-write pattern for thread-safe map updates
-	oldMap := a.converters.Load().(map[string]ConverterFunc)
-	newMap := make(map[string]ConverterFunc, len(oldMap)+1)
-
-	// Copy existing converters
-	for k, v := range oldMap {
-		newMap[k] = v
+	old := a.converters.Load().(*converterRegistry)
+	newReg := &converterRegistry{
+		global: make(map[string]ConverterFunc, len(old.global)+1),
+		byDst:  make(map[reflect.Type]map[string]ConverterFunc, len(old.byDst)),
+		byPair: make(map[[2]reflect.Type]map[string]ConverterFunc, len(old.byPair)),
 	}
-	newMap[fieldName] = fn
-
-	a.converters.Store(newMap)
+	for k, v := range old.global {
+		newReg.global[k] = v
+	}
+	for k, v := range old.byDst {
+		m := make(map[string]ConverterFunc, len(v))
+		for fk, fv := range v {
+			m[fk] = fv
+		}
+		newReg.byDst[k] = m
+	}
+	for k, v := range old.byPair {
+		m := make(map[string]ConverterFunc, len(v))
+		for fk, fv := range v {
+			m[fk] = fv
+		}
+		newReg.byPair[k] = m
+	}
+	newReg.global[fieldName] = fn
+	a.converters.Store(newReg)
 }
 
-// Adapt copies and converts fields from src to dst according to the adaptation rules:
-//  1. Copy fields with the same name and type directly
-//  2. Copy and convert fields with the same name using a registered converter.
-//  3. Marshal remaining source fields to dst.AdditionalData (null.JSON), if present.
-//  4. Unmarshal src.AdditionalData (null.JSON) to populate dst fields
-//
-// Fields can be excluded from adaptation by adding the `adapter:"ignore"` or `adapter:"-"` struct tag.
-// Ignored fields will not be copied, converted, or included in AdditionalData marshaling.
-//
-// Both src and dst must be pointers to structs.
+// RegisterConverterFor scope: destination type + fieldName.
+func (a *Adapter) RegisterConverterFor(dstType any, fieldName string, fn ConverterFunc) {
+	old := a.converters.Load().(*converterRegistry)
+	newReg := &converterRegistry{
+		global: make(map[string]ConverterFunc, len(old.global)),
+		byDst:  make(map[reflect.Type]map[string]ConverterFunc, len(old.byDst)+1),
+		byPair: make(map[[2]reflect.Type]map[string]ConverterFunc, len(old.byPair)),
+	}
+	for k, v := range old.global {
+		newReg.global[k] = v
+	}
+	for k, v := range old.byDst {
+		m := make(map[string]ConverterFunc, len(v))
+		for fk, fv := range v {
+			m[fk] = fv
+		}
+		newReg.byDst[k] = m
+	}
+	for k, v := range old.byPair {
+		m := make(map[string]ConverterFunc, len(v))
+		for fk, fv := range v {
+			m[fk] = fv
+		}
+		newReg.byPair[k] = m
+	}
+	dt := reflect.TypeOf(dstType)
+	if dt.Kind() == reflect.Ptr {
+		dt = dt.Elem()
+	}
+	m := newReg.byDst[dt]
+	if m == nil {
+		m = make(map[string]ConverterFunc)
+		newReg.byDst[dt] = m
+	}
+	m[fieldName] = fn
+	a.converters.Store(newReg)
+}
+
+// RegisterConverterForPair scope: (srcType,dstType)+fieldName highest precedence.
+func (a *Adapter) RegisterConverterForPair(srcType, dstType any, fieldName string, fn ConverterFunc) {
+	old := a.converters.Load().(*converterRegistry)
+	newReg := &converterRegistry{
+		global: make(map[string]ConverterFunc, len(old.global)),
+		byDst:  make(map[reflect.Type]map[string]ConverterFunc, len(old.byDst)),
+		byPair: make(map[[2]reflect.Type]map[string]ConverterFunc, len(old.byPair)+1),
+	}
+	for k, v := range old.global {
+		newReg.global[k] = v
+	}
+	for k, v := range old.byDst {
+		m := make(map[string]ConverterFunc, len(v))
+		for fk, fv := range v {
+			m[fk] = fv
+		}
+		newReg.byDst[k] = m
+	}
+	for k, v := range old.byPair {
+		m := make(map[string]ConverterFunc, len(v))
+		for fk, fv := range v {
+			m[fk] = fv
+		}
+		newReg.byPair[k] = m
+	}
+	st := reflect.TypeOf(srcType)
+	if st.Kind() == reflect.Ptr {
+		st = st.Elem()
+	}
+	dt := reflect.TypeOf(dstType)
+	if dt.Kind() == reflect.Ptr {
+		dt = dt.Elem()
+	}
+	key := [2]reflect.Type{st, dt}
+	m := newReg.byPair[key]
+	if m == nil {
+		m = make(map[string]ConverterFunc)
+		newReg.byPair[key] = m
+	}
+	m[fieldName] = fn
+	a.converters.Store(newReg)
+}
+
+// Adapt performs adaptation from src -> dst.
 func (a *Adapter) Adapt(src, dst interface{}) error {
 	if src == nil || dst == nil {
 		return fmt.Errorf("src and dst must not be nil")
@@ -105,470 +252,354 @@ func (a *Adapter) Adapt(src, dst interface{}) error {
 	return a.adaptStruct(dstVal, srcVal)
 }
 
-// getBoolMap retrieves a map from the pool and clears it.
-// desiredCapacity is used to allocate appropriately sized maps on first use from the pool.
-func (a *Adapter) getBoolMap(desiredCapacity int) map[string]bool {
-	pooledMap := a.boolMapPool.Get().(map[string]bool)
-
-	// If this is a nil map from the pool (brand new from sync.Pool.New),
-	// allocate with proper capacity
-	if pooledMap == nil {
-		return make(map[string]bool, desiredCapacity)
+// --- metadata helpers ---
+func (a *Adapter) getBoolMap(capHint int) map[string]bool {
+	pooled := a.boolMapPool.Get().(map[string]bool)
+	if pooled == nil {
+		return make(map[string]bool, capHint)
 	}
-
-	// Clear the map for reuse (fast even for large maps - just resets internal buckets)
-	for k := range pooledMap {
-		delete(pooledMap, k)
+	for k := range pooled {
+		delete(pooled, k)
 	}
-
-	return pooledMap
+	return pooled
 }
-
-// putBoolMap returns a map to the pool
 func (a *Adapter) putBoolMap(m map[string]bool) {
-	if m == nil {
-		return
+	if m != nil && len(m) <= 128 {
+		a.boolMapPool.Put(m)
 	}
-	// Don't return excessively large maps to the pool (prevents memory bloat)
-	if len(m) > 128 {
-		return
-	}
-	a.boolMapPool.Put(m)
 }
 
-// getOrBuildMetadata retrieves or builds cached metadata for a struct type
 func (a *Adapter) getOrBuildMetadata(typ reflect.Type) *structMetadata {
 	if cached, ok := a.metadataCache.Load(typ); ok {
 		return cached.(*structMetadata)
 	}
-
-	// Count total fields including embedded structs for accurate preallocation
-	fieldCount := a.countFields(typ)
-
-	meta := &structMetadata{
-		fields:              make([]fieldInfo, 0, fieldCount),
-		fieldsByName:        make(map[string]*fieldInfo, fieldCount),
-		additionalDataField: nil,
-	}
-
-	// Build field metadata, handling embedded structs and struct tags
+	fc := a.countFields(typ)
+	meta := &structMetadata{fields: make([]fieldInfo, 0, fc), fieldsByName: make(map[string]*fieldInfo, fc), fieldsByJSONName: make(map[string]*fieldInfo, fc)}
 	a.buildFieldMetadata(typ, meta, nil)
-
-	// Build fieldsByName map AFTER all fields are added to prevent stale pointers
-	// (slice may have reallocated during buildFieldMetadata, though unlikely with correct capacity)
 	for i := range meta.fields {
-		meta.fieldsByName[meta.fields[i].name] = &meta.fields[i]
+		fi := &meta.fields[i]
+		meta.fieldsByName[fi.name] = fi
+		if fi.jsonName != "" {
+			meta.fieldsByJSONName[fi.jsonName] = fi
+		}
 	}
-
-	// Cache AdditionalData field lookup if it exists
-	if adField, ok := meta.fieldsByName["AdditionalData"]; ok && adField.isAdditionalData {
-		meta.additionalDataField = adField
+	if ad, ok := meta.fieldsByName["AdditionalData"]; ok && ad.isAdditionalData {
+		meta.additionalDataField = ad
 	}
-
-	// Store and return (handle race condition gracefully)
 	actual, _ := a.metadataCache.LoadOrStore(typ, meta)
 	return actual.(*structMetadata)
 }
 
-// safeFieldByIndex is like FieldByIndex but returns false if any intermediate pointer is nil
 func (a *Adapter) safeFieldByIndex(val reflect.Value, index []int) (reflect.Value, bool) {
 	for i, x := range index {
-		if i > 0 {
-			// Check if this is a nil pointer before dereferencing
-			if val.Kind() == reflect.Ptr {
-				if val.IsNil() {
-					return reflect.Value{}, false
-				}
-				val = val.Elem()
+		if i > 0 && val.Kind() == reflect.Ptr {
+			if val.IsNil() {
+				return reflect.Value{}, false
 			}
+			val = val.Elem()
 		}
 		val = val.Field(x)
 	}
 	return val, true
 }
 
-// countFields recursively counts all fields including those in embedded structs
 func (a *Adapter) countFields(typ reflect.Type) int {
-	count := 0
+	c := 0
 	for i := 0; i < typ.NumField(); i++ {
-		field := typ.Field(i)
-
-		// Skip unexported fields
-		if field.PkgPath != "" {
+		f := typ.Field(i)
+		if f.PkgPath != "" {
 			continue
 		}
-
-		// Handle embedded structs - recurse into them
-		if field.Anonymous {
-			fieldType := field.Type
-			// Dereference pointer if it's a pointer-to-struct
-			if fieldType.Kind() == reflect.Ptr {
-				fieldType = fieldType.Elem()
+		if f.Anonymous {
+			ft := f.Type
+			if ft.Kind() == reflect.Ptr {
+				ft = ft.Elem()
 			}
-			if fieldType.Kind() == reflect.Struct {
-				count += a.countFields(fieldType)
+			if ft.Kind() == reflect.Struct {
+				c += a.countFields(ft)
 				continue
 			}
 		}
-
-		count++
+		c++
 	}
-	return count
+	return c
 }
 
-// buildFieldMetadata recursively builds field metadata including embedded structs
-func (a *Adapter) buildFieldMetadata(typ reflect.Type, meta *structMetadata, indexPrefix []int) {
+func (a *Adapter) buildFieldMetadata(typ reflect.Type, meta *structMetadata, prefix []int) {
 	for i := 0; i < typ.NumField(); i++ {
-		field := typ.Field(i)
-
-		// Build index path (for nested access)
-		fieldIndex := append(append([]int(nil), indexPrefix...), i)
-
-		// Handle embedded structs - recurse into them
-		// Support both direct embedded structs and pointer-to-struct embedded fields
-		if field.Anonymous {
-			fieldType := field.Type
-			// Dereference pointer if it's a pointer-to-struct
-			if fieldType.Kind() == reflect.Ptr {
-				fieldType = fieldType.Elem()
+		f := typ.Field(i)
+		idx := append(append([]int(nil), prefix...), i)
+		if f.Anonymous {
+			ft := f.Type
+			if ft.Kind() == reflect.Ptr {
+				ft = ft.Elem()
 			}
-			if fieldType.Kind() == reflect.Struct {
-				a.buildFieldMetadata(fieldType, meta, fieldIndex)
+			if ft.Kind() == reflect.Struct {
+				a.buildFieldMetadata(ft, meta, idx)
 				continue
 			}
 		}
-
-		// Skip unexported fields
-		if field.PkgPath != "" {
+		if f.PkgPath != "" {
 			continue
 		}
-
-		// Parse adapter struct tag to check if field should be ignored
-		adapterTag := field.Tag.Get("adapter")
-		shouldIgnore := adapterTag == "ignore" || adapterTag == "-"
-
-		// Check if this is an AdditionalData field
-		// Support both null.JSON and sqlboiler types.JSON
-		isAdditionalDataField := field.Name == "AdditionalData" && (field.Type == reflect.TypeOf(null.JSON{}) ||
-			field.Type == reflect.TypeOf(boilertypes.JSON{}))
-
-		info := fieldInfo{
-			index:            fieldIndex,
-			name:             field.Name,
-			typ:              field.Type,
-			canSet:           true, // already checked it's exported
-			isAdditionalData: isAdditionalDataField,
-			ignore:           shouldIgnore,
+		adapterTag := f.Tag.Get("adapter")
+		ignore := adapterTag == "ignore" || adapterTag == "-"
+		jsonName := ""
+		if jt, ok := f.Tag.Lookup("json"); ok {
+			for j := 0; j < len(jt); j++ {
+				if jt[j] == ',' {
+					jt = jt[:j]
+					break
+				}
+			}
+			if jt != "-" {
+				jsonName = jt
+			}
 		}
-		meta.fields = append(meta.fields, info)
+		isAD := f.Name == "AdditionalData" && (f.Type == reflect.TypeOf(null.JSON{}) || f.Type == reflect.TypeOf(boilertypes.JSON{}))
+		meta.fields = append(meta.fields, fieldInfo{index: idx, name: f.Name, jsonName: jsonName, typ: f.Type, canSet: true, isAdditionalData: isAD, ignore: ignore})
 	}
 }
 
-// adaptStruct performs the struct-to-struct adaptation
+// --- core adaptation ---
 func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
-	dstType := dstVal.Type()
-	srcType := srcVal.Type()
-
-	// Get cached metadata
-	dstMeta := a.getOrBuildMetadata(dstType)
-	srcMeta := a.getOrBuildMetadata(srcType)
-
-	// Only allocate tracking maps if we have AdditionalData fields to process
-	hasAdditionalDataProcessing := srcMeta.additionalDataField != nil || dstMeta.additionalDataField != nil
-	var processedSrcFields map[string]bool
-	var dstFieldsSet map[string]bool
-
-	if hasAdditionalDataProcessing {
-		// Get maps from pool for reuse, sized based on actual field counts
-		// Use the larger of src/dst field counts as capacity hint
-		mapCapacity := len(srcMeta.fields)
-		if len(dstMeta.fields) > mapCapacity {
-			mapCapacity = len(dstMeta.fields)
+	dt := dstVal.Type()
+	st := srcVal.Type()
+	dstMeta := a.getOrBuildMetadata(dt)
+	srcMeta := a.getOrBuildMetadata(st)
+	hasAD := srcMeta.additionalDataField != nil || dstMeta.additionalDataField != nil
+	var processed, dstSet map[string]bool
+	if hasAD {
+		capHint := len(srcMeta.fields)
+		if len(dstMeta.fields) > capHint {
+			capHint = len(dstMeta.fields)
 		}
-
-		processedSrcFields = a.getBoolMap(mapCapacity)
-		dstFieldsSet = a.getBoolMap(mapCapacity)
-
-		// Ensure cleanup happens even on error
-		defer func() {
-			a.putBoolMap(processedSrcFields)
-			a.putBoolMap(dstFieldsSet)
-		}()
+		processed = a.getBoolMap(capHint)
+		dstSet = a.getBoolMap(capHint)
+		defer func() { a.putBoolMap(processed); a.putBoolMap(dstSet) }()
 	}
-
-	// Step 1 & 2: Copy fields with the same name (with or without conversion)
 	for i := range dstMeta.fields {
-		dstFieldInfo := &dstMeta.fields[i]
-
-		// Skip unexported, ignored, or AdditionalData fields
-		if !dstFieldInfo.canSet || dstFieldInfo.isAdditionalData || dstFieldInfo.ignore {
+		df := &dstMeta.fields[i]
+		if !df.canSet || df.isAdditionalData || df.ignore {
 			continue
 		}
-
-		// Find matching source field using cached metadata
-		srcFieldInfo, found := srcMeta.fieldsByName[dstFieldInfo.name]
+		sf, found := srcMeta.fieldsByName[df.name]
+		if !found && df.jsonName != "" {
+			sf, found = srcMeta.fieldsByJSONName[df.jsonName]
+		}
 		if !found {
 			continue
 		}
-
-		// Skip source AdditionalData or ignored fields
-		if srcFieldInfo.isAdditionalData || srcFieldInfo.ignore {
-			if hasAdditionalDataProcessing {
-				processedSrcFields[srcFieldInfo.name] = true
+		if sf.isAdditionalData || sf.ignore {
+			if hasAD {
+				processed[sf.name] = true
 			}
 			continue
 		}
-
-		// Get field values by index (faster than FieldByName)
-		// Handle nil pointers in embedded field paths
-		srcField, ok := a.safeFieldByIndex(srcVal, srcFieldInfo.index)
+		srcField, ok := a.safeFieldByIndex(srcVal, sf.index)
 		if !ok {
-			// Embedded pointer is nil, skip this field
 			continue
 		}
-		dstField := dstVal.FieldByIndex(dstFieldInfo.index)
-
-		// Try to copy/convert the field
-		if err := a.adaptField(dstField, srcField, dstFieldInfo.name); err != nil {
-			return fmt.Errorf("adapting field %s: %w", dstFieldInfo.name, err)
+		dstField := dstVal.FieldByIndex(df.index)
+		if err := a.adaptField(dstField, srcField, df.name, st, dt); err != nil {
+			return fmt.Errorf("adapting field %s: %w", df.name, err)
 		}
-
-		if hasAdditionalDataProcessing {
-			processedSrcFields[srcFieldInfo.name] = true
-			dstFieldsSet[dstFieldInfo.name] = true
+		if hasAD {
+			processed[sf.name] = true
+			dstSet[df.name] = true
 		}
 	}
-
-	// Step 4: Unmarshal src.AdditionalData (null.JSON) to populate dst fields
 	if srcMeta.additionalDataField != nil {
-		srcAdditionalData := srcVal.FieldByIndex(srcMeta.additionalDataField.index)
-		if err := a.unmarshalAdditionalData(dstVal, dstMeta, srcAdditionalData, dstFieldsSet); err != nil {
+		srcAD := srcVal.FieldByIndex(srcMeta.additionalDataField.index)
+		if err := a.unmarshalAdditionalData(dstVal, dstMeta, srcAD, dstSet); err != nil {
 			return fmt.Errorf("unmarshaling AdditionalData: %w", err)
 		}
-		if hasAdditionalDataProcessing {
-			processedSrcFields["AdditionalData"] = true
+		if hasAD {
+			processed["AdditionalData"] = true
 		}
 	}
-
-	// Step 3: Marshal remaining source fields to dst.AdditionalData (null.JSON)
 	if dstMeta.additionalDataField != nil {
-		dstAdditionalData := dstVal.FieldByIndex(dstMeta.additionalDataField.index)
-		// Marshal any remaining unprocessed source fields to AdditionalData
-		if err := a.marshalRemainingFields(dstAdditionalData, srcVal, srcType, processedSrcFields); err != nil {
+		dstAD := dstVal.FieldByIndex(dstMeta.additionalDataField.index)
+		if err := a.marshalRemainingFields(dstAD, srcVal, st, processed); err != nil {
 			return fmt.Errorf("marshaling remaining fields to AdditionalData: %w", err)
 		}
 	}
-
 	return nil
 }
 
-// adaptField copies or converts a single field value
-func (a *Adapter) adaptField(dstField, srcField reflect.Value, fieldName string) error {
-	// Check if destination field can be set
+func (a *Adapter) adaptField(dstField, srcField reflect.Value, fieldName string, srcRoot, dstRoot reflect.Type) error {
 	if !dstField.CanSet() {
 		return fmt.Errorf("cannot set field %s (unexported or unsettable)", fieldName)
 	}
-
+	reg := a.converters.Load().(*converterRegistry)
+	// precedence pair > dst > global
+	if fn := reg.byPair[[2]reflect.Type{srcRoot, dstRoot}][fieldName]; fn != nil {
+		return a.applyConverter(dstField, fn, srcField, fieldName)
+	}
+	if fn := reg.byDst[dstRoot][fieldName]; fn != nil {
+		return a.applyConverter(dstField, fn, srcField, fieldName)
+	}
+	if fn := reg.global[fieldName]; fn != nil {
+		return a.applyConverter(dstField, fn, srcField, fieldName)
+	}
 	srcType := srcField.Type()
 	dstType := dstField.Type()
-
-	// Load converter map once (lock-free read) - CHANGED
-	converters := a.converters.Load().(map[string]ConverterFunc)
-	converter, exists := converters[fieldName]
-
-	if exists {
-		// Use registered converter
-		converted, err := converter(srcField.Interface())
-		if err != nil {
-			return err
-		}
-		// Handle nil converter result
-		if converted == nil {
-			// Set zero value for destination type
-			dstField.Set(reflect.Zero(dstType))
-			return nil
-		}
-		convertedVal := reflect.ValueOf(converted)
-		if !convertedVal.IsValid() {
-			return fmt.Errorf("converter returned invalid value for field %s", fieldName)
-		}
-		if !convertedVal.Type().AssignableTo(dstType) {
-			return fmt.Errorf("converter returned type %s, expected %s", convertedVal.Type(), dstType)
-		}
-		dstField.Set(convertedVal)
-		return nil
-	}
-
-	// If types are identical, direct assignment
 	if srcType == dstType {
 		dstField.Set(srcField)
 		return nil
 	}
-
-	// If types are assignable, assign directly
 	if srcType.AssignableTo(dstType) {
 		dstField.Set(srcField)
 		return nil
 	}
-
-	// If types are convertible, convert and assign
 	if srcType.ConvertibleTo(dstType) {
 		dstField.Set(srcField.Convert(dstType))
 		return nil
 	}
-
-	// Cannot copy this field - skip it silently
 	return nil
 }
 
-// unmarshalAdditionalData unmarshals src.AdditionalData to populate dst fields
-func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, dstMeta *structMetadata, srcAdditionalData reflect.Value, dstFieldsSet map[string]bool) error {
-	var jsonData []byte
-
-	// Try null.JSON first
-	if nullJSON, ok := srcAdditionalData.Interface().(null.JSON); ok {
-		if !nullJSON.Valid {
-			return nil // No data to unmarshal
-		}
-		jsonData = nullJSON.JSON
-	} else if boilerJSON, ok := srcAdditionalData.Interface().(boilertypes.JSON); ok {
-		if len(boilerJSON) == 0 {
-			return nil // No data to unmarshal
-		}
-		jsonData = boilerJSON
-	} else {
-		return nil // Not a supported JSON type
-	}
-
-	// Unmarshal to a map
-	var additionalFields map[string]json.RawMessage
-	if err := json.Unmarshal(jsonData, &additionalFields); err != nil {
-		return err
-	}
-
-	// Load converter map once (lock-free read) - CHANGED
-	converters := a.converters.Load().(map[string]ConverterFunc)
-
-	// Populate destination fields from AdditionalData
-	for fieldName, rawValue := range additionalFields {
-		// Skip if field was already set (rule: don't overwrite)
-		if dstFieldsSet[fieldName] {
-			continue
-		}
-
-		// Look up field in metadata (fast map lookup)
-		dstFieldInfo, found := dstMeta.fieldsByName[fieldName]
-		if !found || !dstFieldInfo.canSet || dstFieldInfo.ignore {
-			continue // Field doesn't exist, isn't settable, or is ignored
-		}
-
-		// Use cached index for fast field access
-		dstField := dstVal.FieldByIndex(dstFieldInfo.index)
-
-		// Check if converter exists for this field - CHANGED
-		converter, exists := converters[fieldName]
-
-		if exists {
-			// Unmarshal to interface{} to preserve JSON types (e.g. float64 for numbers)
-			var rawVal interface{}
-			if err := json.Unmarshal(rawValue, &rawVal); err != nil {
-				continue // Skip fields that can't be unmarshaled
-			}
-
-			// Apply converter - converter is responsible for handling type conversions
-			// Note: converters receive JSON-native types (numbers as float64)
-			converted, err := converter(rawVal)
-			if err != nil {
-				continue // Skip on conversion error
-			}
-			// Handle nil converter result
-			if converted == nil {
-				dstField.Set(reflect.Zero(dstField.Type()))
-				dstFieldsSet[fieldName] = true
-				continue
-			}
-			convertedVal := reflect.ValueOf(converted)
-			if !convertedVal.IsValid() {
-				continue // Skip invalid values
-			}
-			if convertedVal.Type().AssignableTo(dstField.Type()) {
-				dstField.Set(convertedVal)
-				dstFieldsSet[fieldName] = true
-			}
-		} else {
-			// Create a pointer to the field's type for unmarshaling
-			fieldPtr := reflect.New(dstField.Type())
-			if err := json.Unmarshal(rawValue, fieldPtr.Interface()); err != nil {
-				continue // Skip fields that can't be unmarshaled
-			}
-			// Direct assignment
-			dstField.Set(fieldPtr.Elem())
-			dstFieldsSet[fieldName] = true
-		}
-	}
-
-	return nil
-}
-
-// marshalRemainingFields marshals unprocessed source fields to dst.AdditionalData
-func (a *Adapter) marshalRemainingFields(dstAdditionalData reflect.Value, srcVal reflect.Value, srcType reflect.Type, processedSrcFields map[string]bool) error {
-	remainingFields := make(map[string]interface{})
-
-	// Get source metadata to iterate flattened fields
-	srcMeta := a.getOrBuildMetadata(srcType)
-
-	// Collect unprocessed fields using flattened metadata
-	for i := range srcMeta.fields {
-		srcFieldInfo := &srcMeta.fields[i]
-
-		// Skip AdditionalData or ignored fields
-		if srcFieldInfo.isAdditionalData || srcFieldInfo.ignore {
-			continue
-		}
-
-		// Skip if already processed
-		if processedSrcFields[srcFieldInfo.name] {
-			continue
-		}
-
-		// Get field value by index (handles embedded structs)
-		srcField, ok := a.safeFieldByIndex(srcVal, srcFieldInfo.index)
-		if !ok || !srcField.CanInterface() {
-			continue
-		}
-
-		// Skip zero/empty values to keep AdditionalData compact
-		if srcField.IsZero() {
-			continue
-		}
-
-		remainingFields[srcFieldInfo.name] = srcField.Interface()
-	}
-
-	// Marshal to JSON
-	jsonData, err := json.Marshal(remainingFields)
+func (a *Adapter) applyConverter(dstField reflect.Value, fn ConverterFunc, srcField reflect.Value, fieldName string) error {
+	converted, err := fn(srcField.Interface())
 	if err != nil {
 		return err
 	}
+	if converted == nil {
+		dstField.Set(reflect.Zero(dstField.Type()))
+		return nil
+	}
+	cv := reflect.ValueOf(converted)
+	if !cv.IsValid() {
+		return fmt.Errorf("converter returned invalid value for field %s", fieldName)
+	}
+	if !cv.Type().AssignableTo(dstField.Type()) {
+		return fmt.Errorf("converter returned type %s, expected %s", cv.Type(), dstField.Type())
+	}
+	dstField.Set(cv)
+	return nil
+}
 
-	// Set AdditionalData field - support both null.JSON and types.JSON
-	dstType := dstAdditionalData.Type()
-	if dstType == reflect.TypeOf(null.JSON{}) {
-		// Set null.JSON field using JSONFrom
-		if len(remainingFields) == 0 {
+func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, dstMeta *structMetadata, srcAdditionalData reflect.Value, dstFieldsSet map[string]bool) error {
+	var rawBytes []byte
+	if nj, ok := srcAdditionalData.Interface().(null.JSON); ok {
+		if !nj.Valid {
+			return nil
+		}
+		rawBytes = nj.JSON
+	} else if bj, ok := srcAdditionalData.Interface().(boilertypes.JSON); ok {
+		if len(bj) == 0 {
+			return nil
+		}
+		rawBytes = bj
+	} else {
+		return nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(rawBytes, &fields); err != nil {
+		return err
+	}
+	reg := a.converters.Load().(*converterRegistry)
+	lookupInsensitive := a.options.CaseInsensitiveAdditionalData
+	lookup := func(key string) (*fieldInfo, bool, string) {
+		if !lookupInsensitive {
+			if fi, ok := dstMeta.fieldsByName[key]; ok {
+				return fi, true, fi.name
+			}
+			if fi, ok := dstMeta.fieldsByJSONName[key]; ok {
+				return fi, true, fi.name
+			}
+			return nil, false, ""
+		}
+		lk := strings.ToLower(key)
+		if fi, ok := dstMeta.fieldsByName[key]; ok {
+			return fi, true, fi.name
+		}
+		if fi, ok := dstMeta.fieldsByJSONName[key]; ok {
+			return fi, true, fi.name
+		}
+		for n, fi := range dstMeta.fieldsByName {
+			if strings.ToLower(n) == lk {
+				return fi, true, fi.name
+			}
+		}
+		for jn, fi := range dstMeta.fieldsByJSONName {
+			if strings.ToLower(jn) == lk {
+				return fi, true, fi.name
+			}
+		}
+		return nil, false, ""
+	}
+	for k, raw := range fields {
+		fi, ok, canon := lookup(k)
+		if !ok || !fi.canSet || fi.ignore {
+			continue
+		}
+		if a.options.OverwritePolicy == PreferFields && dstFieldsSet[canon] {
+			continue
+		}
+		dstField := dstVal.FieldByIndex(fi.index)
+		if fn := reg.global[fi.name]; fn != nil { // converter path
+			var anyVal interface{}
+			if err := json.Unmarshal(raw, &anyVal); err == nil {
+				converted, err := fn(anyVal)
+				if err == nil && converted != nil {
+					cv := reflect.ValueOf(converted)
+					if cv.IsValid() && cv.Type().AssignableTo(dstField.Type()) {
+						dstField.Set(cv)
+						dstFieldsSet[canon] = true
+					}
+				}
+			}
+			// Do not fallback to direct unmarshal when a converter is registered, regardless of outcome
+			continue
+		}
+		ptr := reflect.New(dstField.Type())
+		if err := json.Unmarshal(raw, ptr.Interface()); err != nil {
+			continue
+		}
+		dstField.Set(ptr.Elem())
+		dstFieldsSet[canon] = true
+	}
+	return nil
+}
+
+func (a *Adapter) marshalRemainingFields(dstAdditionalData reflect.Value, srcVal reflect.Value, srcType reflect.Type, processed map[string]bool) error {
+	remaining := make(map[string]interface{})
+	srcMeta := a.getOrBuildMetadata(srcType)
+	for i := range srcMeta.fields {
+		sf := &srcMeta.fields[i]
+		if sf.isAdditionalData || sf.ignore {
+			continue
+		}
+		if processed[sf.name] {
+			continue
+		}
+		srcField, ok := a.safeFieldByIndex(srcVal, sf.index)
+		if !ok || !srcField.CanInterface() {
+			continue
+		}
+		if !a.options.IncludeZeroValues && srcField.IsZero() {
+			continue
+		}
+		remaining[sf.name] = srcField.Interface()
+	}
+	bytes, err := json.Marshal(remaining)
+	if err != nil {
+		return err
+	}
+	t := dstAdditionalData.Type()
+	if t == reflect.TypeOf(null.JSON{}) {
+		if len(remaining) == 0 {
 			dstAdditionalData.Set(reflect.ValueOf(null.JSON{}))
 		} else {
-			nullJSON := null.JSONFrom(jsonData)
-			dstAdditionalData.Set(reflect.ValueOf(nullJSON))
+			dstAdditionalData.Set(reflect.ValueOf(null.JSONFrom(bytes)))
 		}
-	} else if dstType == reflect.TypeOf(boilertypes.JSON{}) {
-		// Set types.JSON field (which is just []byte underneath)
-		if len(remainingFields) == 0 {
+	} else if t == reflect.TypeOf(boilertypes.JSON{}) {
+		if len(remaining) == 0 {
 			dstAdditionalData.Set(reflect.ValueOf(boilertypes.JSON(nil)))
 		} else {
-			dstAdditionalData.Set(reflect.ValueOf(boilertypes.JSON(jsonData)))
+			dstAdditionalData.Set(reflect.ValueOf(boilertypes.JSON(bytes)))
 		}
 	}
-
 	return nil
 }
