@@ -1,22 +1,20 @@
 // Package adapters provides struct-to-struct adaptation with field conversion and AdditionalData handling.
 //
 // The Adapter type manages field conversions and performs struct-to-struct adaptation
-// with special handling for AdditionalData fields of type null.JSON.
+// with special handling for AdditionalData fields of type null.JSON or sqlboiler/types.JSON.
 //
-// # Basic Usage
-//
-// Create an adapter and use it to copy fields between structs:
+// Basic Usage
 //
 //	adapter := adapters.New()
-//	err := adapter.Adapt(sourceStruct, destStruct)
+//	err := adapter.Into(&destStruct, &sourceStruct)
 //
 // # Adaptation Rules
 //
-// The Adapt method follows these rules in order:
+// The Into method follows these rules in order:
 //  1. Copy fields with the same name and type directly
 //  2. Copy and convert fields with the same name using registered converters
-//  3. Marshal remaining source fields to dst.AdditionalData (null.JSON), if present
-//  4. Unmarshal src.AdditionalData (null.JSON) to populate dst fields
+//  3. Marshal remaining source fields to dst.AdditionalData (null.JSON or types.JSON), if present
+//  4. Unmarshal src.AdditionalData (null.JSON or types.JSON) to populate dst fields
 //
 // # Field Converters
 //
@@ -45,10 +43,10 @@
 //
 // # AdditionalData
 //
-// The AdditionalData field (type null.JSON or boilertypes.JSON) has special handling:
+// The AdditionalData field (type null.JSON or types.JSON) has special handling:
 //   - Fields present in source but not in destination are marshaled to dst.AdditionalData
 //   - Fields in src.AdditionalData that match dst field names are unmarshaled to dst
-//   - Direct field copying takes precedence over AdditionalData unmarshaling
+//   - Direct field copying takes precedence over AdditionalData unmarshaling by default
 //
 // # Embedded Structs
 //
@@ -57,6 +55,6 @@
 //
 // # Thread Safety
 //
-// The Adapter is safe for concurrent use. Multiple goroutines can call Adapt
-// and RegisterConverter simultaneously.
+// The Adapter is safe for concurrent use. Multiple goroutines can call Into and register
+// converters/validators concurrently. Internals use copy-on-write registries and cached plans.
 package adapters

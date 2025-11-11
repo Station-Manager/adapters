@@ -150,6 +150,45 @@ adapter.WarmMetadata(ExampleSrc{}, ExampleDst{})
 
 Pre-builds metadata to reduce first-call latency in hot paths.
 
+## Migration (vNext API change)
+
+Previous API used `Adapt(dst, src)` with source first in some call sites. The new API standardizes on `Into(&dst, &src)` (destination first) for consistency with common Go patterns (io.Reader/io.Writer style). To migrate:
+1. Replace `adapter.Adapt(a, b)` with `adapter.Into(b, a)`.
+2. Update any generic wrappers to use `Copy/AdaptTo/Make` helpers.
+3. Remove any direct field reflection; prefer batch registrations if adding many converters.
+
+## BuildPlan Cache
+
+A build-plan cache accelerates repeated adaptations between the same (src,dst) type pair. Each plan stores:
+- Field index paths
+- Pre-resolved converter & validator functions (respecting precedence: pair > dst > global)
+- AdditionalData presence and indices
+- Adapter generation stamp (invalidates automatically when registries change)
+
+This reduces per-field map lookups and dynamic converter resolution. Benchmarks (Intel i3-10100F) improvements:
+- BasicFieldCopy: ~1450ns -> ~508ns
+- WithConverter: ~1710ns -> ~564ns
+- LargeStruct: ~5140ns -> ~1560ns
+- Concurrent: ~432ns -> ~167ns
+
+No public API change was required; plans are transparent. For latency-sensitive services, pre-warm metadata and plans early:
+
+```go
+ad := adapters.New()
+ad.WarmMetadata(ExampleSrc{}, ExampleDst{}) // metadata
+// first Into call will create plan; optionally perform a single dry run during startup
+_ = ad.Into(&ExampleDst{}, &ExampleSrc{})
+```
+
+A future helper `WarmPlans(pairs...)` could be added if needed.
+
+## Performance (updated)
+
+- Metadata & plan caches avoid repeated reflection and map lookups.
+- Lowercase maps eliminate O(n) scans for case-insensitive AdditionalData.
+- Lazy AdditionalData map & marshal skip allocations when not needed.
+- Copy-on-write registries keep the hot path lock-free.
+
 ## Error Handling
 
 Adapt returns an error if:

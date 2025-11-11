@@ -48,11 +48,37 @@ On a modern Linux dev machine, baseline numbers (before optimizations) were not 
 - Typed converter registry keyed by reflect.Type rather than field name.
 - SIMD-friendly lowercase hashing for AdditionalData keys (only if profiling shows hot).
 
+## Running benches reliably
+
+Some environments may show a `[setup failed]` when running only benchmarks with no tests selected. Work around this by selecting a test alongside benches:
+
+```
+cd adapters
+go test -run TestAdapterSuite -bench=. -benchmem -count=1
+```
+
+Or run an empty test selection that still triggers setup in your environment.
+
+## BuildPlan cache impact (Nov 2025)
+
+We added a build-plan cache that pre-resolves field mappings and converter/validator handlers per (src,dst) type pair. On an Intel i3-10100F:
+
+- BasicFieldCopy: ~1450ns -> ~508ns
+- WithConverter: ~1710ns -> ~564ns
+- LargeStruct: ~5140ns -> ~1560ns
+- Concurrent: ~432ns -> ~167ns
+
+JSON-heavy paths (AdditionalData marshal/unmarshal) show smaller improvements as they are dominated by encoding/decoding.
+
+## Tips
+
+- Warm metadata with `WarmMetadata` during service startup.
+- Optionally perform a dry-run `Into` call per hot type pair to prebuild plans.
+- Use `-cpuprofile` and `-memprofile` on specific benches to inspect hotspots.
+
 ## Reproducing under race detector
 
 ```
 cd adapters
 go test -race -count=3
 ```
-
-
