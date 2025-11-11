@@ -9,17 +9,14 @@ import (
 // TypeToModelStringConverter converts a string to a model null.String.
 func TypeToModelStringConverter(src any) (any, error) {
 	const op errors.Op = "converters.common.TypeToModelCountryConverter"
-	srcVal, err := converters.CheckString(op, src)
-	if err != nil {
-		return null.String{}, errors.New(op).Err(err)
+	srcVal, ok := src.(string)
+	if !ok {
+		return null.String{}, errors.New(op).Errorf("Given parameter not a string, got %T", src)
 	}
-
-	// If empty string, return null
+	// Treat empty string as null (same behavior) but do not error
 	if srcVal == "" {
 		return null.String{}, nil
 	}
-
-	// Return valid null.String
 	return null.StringFrom(srcVal), nil
 }
 
