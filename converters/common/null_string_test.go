@@ -24,11 +24,11 @@ func TestTypeToModelStringConverter(t *testing.T) {
 			wantErr:   false,
 		},
 		{
-			name:      "empty string",
+			name:      "empty string treated as null",
 			input:     "",
 			wantValid: false,
 			wantValue: "",
-			wantErr:   true,
+			wantErr:   false,
 		},
 		{
 			name:      "string with spaces",
@@ -98,10 +98,10 @@ func TestModelToTypeStringConverter(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "empty string",
+			name:    "empty string plain",
 			input:   "",
 			want:    "",
-			wantErr: true,
+			wantErr: false,
 		},
 		{
 			name:    "non-string input",
@@ -138,6 +138,7 @@ func TestStringRoundTrip(t *testing.T) {
 		{"non-empty", "England"},
 		{"with spaces", "United States"},
 		{"with special chars", "São Paulo"},
+		{"empty becomes null then empty", ""},
 	}
 
 	for _, tc := range testCases {

@@ -1,7 +1,6 @@
 package common
 
 import (
-	"github.com/Station-Manager/adapters/converters"
 	"github.com/Station-Manager/errors"
 	"github.com/aarondl/null/v8"
 )
@@ -20,7 +19,7 @@ func TypeToModelStringConverter(src any) (any, error) {
 	return null.StringFrom(srcVal), nil
 }
 
-// ModelToTypeStringConverter converts a model null.String to a string.
+// ModelToTypeStringConverter converts a model null.String or plain string to a string.
 func ModelToTypeStringConverter(src any) (any, error) {
 	const op errors.Op = "converters.common.ModelToTypeCountryConverter"
 
@@ -32,11 +31,10 @@ func ModelToTypeStringConverter(src any) (any, error) {
 		return nullStr.String, nil
 	}
 
-	// Fallback to string check
-	srcVal, err := converters.CheckString(op, src)
-	if err != nil {
-		return "", errors.New(op).Err(err)
+	// Handle plain string directly (including empty string)
+	if s, ok := src.(string); ok {
+		return s, nil
 	}
 
-	return srcVal, nil
+	return "", errors.New(op).Errorf("Given parameter not a string or null.String, got %T", src)
 }
