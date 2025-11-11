@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -106,4 +107,63 @@ func TestComposeConverters(t *testing.T) {
 	out, err := f("hi")
 	require.NoError(t, err)
 	assert.Equal(t, "HI!", out)
+}
+
+func TestValidators_AreApplied(t *testing.T) {
+	a := New()
+	type S struct{ Name string }
+	type D struct{ Name string }
+	// validator enforces uppercase
+	a.RegisterValidator("Name", func(v any) error {
+		s, _ := v.(string)
+		if s != strings.ToUpper(s) {
+			return errors.New("name must be uppercase")
+		}
+		return nil
+	})
+	s := S{Name: "john"}
+	d := D{}
+	err := a.Adapt(&s, &d)
+	assert.Error(t, err)
+}
+
+func TestDisableAdditionalDataOptions(t *testing.T) {
+	a := NewWithOptions(WithDisableUnmarshalAdditionalData(true), WithDisableMarshalAdditionalData(true))
+	type S struct {
+		Name           string
+		AdditionalData null.JSON
+	}
+	type D struct {
+		Name           string
+		AdditionalData null.JSON
+	}
+	m := map[string]any{"Name": "AD"}
+	b, _ := json.Marshal(m)
+	s := S{Name: "Field", AdditionalData: null.JSONFrom(b)}
+	d := D{}
+	require.NoError(t, a.Adapt(&s, &d))
+	// Unmarshal disabled -> Name remains from field only
+	assert.Equal(t, "Field", d.Name)
+	// Marshal disabled -> AdditionalData remains zero
+	assert.False(t, d.AdditionalData.Valid)
+}
+
+func TestBuilder_Basic(t *testing.T) {
+	b := NewBuilder().WithOptions(WithCaseInsensitiveAdditionalData(true)).
+		AddConverter("Name", MapString(strings.ToUpper)).
+		AddValidator("Name", func(v any) error {
+			if v.(string) == "" {
+				return errors.New("empty")
+			}
+			return nil
+		})
+
+	a := b.Build()
+	// sanity test
+	type S struct{ Name string }
+	type D struct{ Name string }
+	s := S{Name: "x"}
+	d := D{}
+	require.NoError(t, a.Adapt(&s, &d))
+	assert.Equal(t, "X", d.Name)
 }

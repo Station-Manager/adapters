@@ -16,6 +16,9 @@ import (
 // It is registered by field name and applies to any source/destination struct pair.
 type ConverterFunc func(src interface{}) (interface{}, error)
 
+// ValidatorFunc validates a field value after conversion and assignment candidate.
+type ValidatorFunc func(value interface{}) error
+
 // Composition helpers
 // ComposeConverters chains multiple ConverterFunc instances left-to-right.
 // If any converter returns an error it aborts.
@@ -56,9 +59,11 @@ const (
 )
 
 type Options struct {
-	IncludeZeroValues             bool            // when true, include zero-valued fields in marshaled AdditionalData
-	CaseInsensitiveAdditionalData bool            // when true, AdditionalData keys are matched case-insensitively
-	OverwritePolicy               OverwritePolicy // controls if AdditionalData overwrites direct fields
+	IncludeZeroValues              bool            // when true, include zero-valued fields in marshaled AdditionalData
+	CaseInsensitiveAdditionalData  bool            // when true, AdditionalData keys are matched case-insensitively
+	OverwritePolicy                OverwritePolicy // controls if AdditionalData overwrites direct fields
+	DisableMarshalAdditionalData   bool            // when true, do not marshal remaining fields into destination AdditionalData
+	DisableUnmarshalAdditionalData bool            // when true, ignore source AdditionalData
 }
 
 type Option func(*Options)
@@ -68,12 +73,25 @@ func WithCaseInsensitiveAdditionalData(v bool) Option {
 	return func(o *Options) { o.CaseInsensitiveAdditionalData = v }
 }
 func WithOverwritePolicy(p OverwritePolicy) Option { return func(o *Options) { o.OverwritePolicy = p } }
+func WithDisableMarshalAdditionalData(v bool) Option {
+	return func(o *Options) { o.DisableMarshalAdditionalData = v }
+}
+func WithDisableUnmarshalAdditionalData(v bool) Option {
+	return func(o *Options) { o.DisableUnmarshalAdditionalData = v }
+}
 
 // converterRegistry stores converters at multiple scopes and is swapped atomically (copy-on-write)
 type converterRegistry struct {
 	global map[string]ConverterFunc
 	byDst  map[reflect.Type]map[string]ConverterFunc
 	byPair map[[2]reflect.Type]map[string]ConverterFunc // [srcType, dstType]
+}
+
+// ValidatorFunc validates a field value after conversion and assignment candidate.
+type validatorRegistry struct {
+	global map[string]ValidatorFunc
+	byDst  map[reflect.Type]map[string]ValidatorFunc
+	byPair map[[2]reflect.Type]map[string]ValidatorFunc
 }
 
 type fieldInfo struct {
@@ -97,6 +115,7 @@ type structMetadata struct {
 // See README for usage and option guidelines.
 type Adapter struct {
 	converters    atomic.Value // holds *converterRegistry
+	validators    atomic.Value // holds *validatorRegistry
 	metadataCache sync.Map     // map[reflect.Type]*structMetadata
 	boolMapPool   sync.Pool    // Pool for map[string]bool reuse
 	options       Options
@@ -115,6 +134,8 @@ func NewWithOptions(opts ...Option) *Adapter {
 	a.options = optsState
 	reg := &converterRegistry{global: make(map[string]ConverterFunc), byDst: make(map[reflect.Type]map[string]ConverterFunc), byPair: make(map[[2]reflect.Type]map[string]ConverterFunc)}
 	a.converters.Store(reg)
+	vreg := &validatorRegistry{global: make(map[string]ValidatorFunc), byDst: make(map[reflect.Type]map[string]ValidatorFunc), byPair: make(map[[2]reflect.Type]map[string]ValidatorFunc)}
+	a.validators.Store(vreg)
 	a.boolMapPool = sync.Pool{New: func() interface{} { return (map[string]bool)(nil) }}
 	return a
 }
@@ -227,6 +248,121 @@ func (a *Adapter) RegisterConverterForPair(srcType, dstType any, fieldName strin
 	}
 	m[fieldName] = fn
 	a.converters.Store(newReg)
+}
+
+// RegisterValidator adds a global validator for a field name.
+func (a *Adapter) RegisterValidator(fieldName string, fn ValidatorFunc) {
+	old := a.validators.Load().(*validatorRegistry)
+	newReg := &validatorRegistry{global: make(map[string]ValidatorFunc, len(old.global)+1), byDst: make(map[reflect.Type]map[string]ValidatorFunc, len(old.byDst)), byPair: make(map[[2]reflect.Type]map[string]ValidatorFunc, len(old.byPair))}
+	for k, v := range old.global {
+		newReg.global[k] = v
+	}
+	for k, v := range old.byDst {
+		m := make(map[string]ValidatorFunc, len(v))
+		for fk, fv := range v {
+			m[fk] = fv
+		}
+		newReg.byDst[k] = m
+	}
+	for k, v := range old.byPair {
+		m := make(map[string]ValidatorFunc, len(v))
+		for fk, fv := range v {
+			m[fk] = fv
+		}
+		newReg.byPair[k] = m
+	}
+	newReg.global[fieldName] = fn
+	a.validators.Store(newReg)
+}
+
+// RegisterValidatorFor adds a validator scoped to a destination type.
+func (a *Adapter) RegisterValidatorFor(dstType any, fieldName string, fn ValidatorFunc) {
+	old := a.validators.Load().(*validatorRegistry)
+	newReg := &validatorRegistry{global: make(map[string]ValidatorFunc, len(old.global)), byDst: make(map[reflect.Type]map[string]ValidatorFunc, len(old.byDst)+1), byPair: make(map[[2]reflect.Type]map[string]ValidatorFunc, len(old.byPair))}
+	for k, v := range old.global {
+		newReg.global[k] = v
+	}
+	for k, v := range old.byDst {
+		m := make(map[string]ValidatorFunc, len(v))
+		for fk, fv := range v {
+			m[fk] = fv
+		}
+		newReg.byDst[k] = m
+	}
+	for k, v := range old.byPair {
+		m := make(map[string]ValidatorFunc, len(v))
+		for fk, fv := range v {
+			m[fk] = fv
+		}
+		newReg.byPair[k] = m
+	}
+	dt := reflect.TypeOf(dstType)
+	if dt.Kind() == reflect.Ptr {
+		dt = dt.Elem()
+	}
+	m := newReg.byDst[dt]
+	if m == nil {
+		m = make(map[string]ValidatorFunc)
+		newReg.byDst[dt] = m
+	}
+	m[fieldName] = fn
+	a.validators.Store(newReg)
+}
+
+// RegisterValidatorForPair adds a validator scoped to (srcType,dstType) for a field name.
+func (a *Adapter) RegisterValidatorForPair(srcType, dstType any, fieldName string, fn ValidatorFunc) {
+	old := a.validators.Load().(*validatorRegistry)
+	newReg := &validatorRegistry{global: make(map[string]ValidatorFunc, len(old.global)), byDst: make(map[reflect.Type]map[string]ValidatorFunc, len(old.byDst)), byPair: make(map[[2]reflect.Type]map[string]ValidatorFunc, len(old.byPair)+1)}
+	for k, v := range old.global {
+		newReg.global[k] = v
+	}
+	for k, v := range old.byDst {
+		m := make(map[string]ValidatorFunc, len(v))
+		for fk, fv := range v {
+			m[fk] = fv
+		}
+		newReg.byDst[k] = m
+	}
+	for k, v := range old.byPair {
+		m := make(map[string]ValidatorFunc, len(v))
+		for fk, fv := range v {
+			m[fk] = fv
+		}
+		newReg.byPair[k] = m
+	}
+	st := reflect.TypeOf(srcType)
+	if st.Kind() == reflect.Ptr {
+		st = st.Elem()
+	}
+	dt := reflect.TypeOf(dstType)
+	if dt.Kind() == reflect.Ptr {
+		dt = dt.Elem()
+	}
+	key := [2]reflect.Type{st, dt}
+	m := newReg.byPair[key]
+	if m == nil {
+		m = make(map[string]ValidatorFunc)
+		newReg.byPair[key] = m
+	}
+	m[fieldName] = fn
+	a.validators.Store(newReg)
+}
+
+// WarmMetadata pre-builds metadata for provided example values or types (pass either a value or a *T or T).
+func (a *Adapter) WarmMetadata(examples ...any) {
+	for _, e := range examples {
+		if e == nil {
+			continue
+		}
+		t := reflect.TypeOf(e)
+		if t.Kind() == reflect.Ptr {
+			t = t.Elem()
+		}
+		if t.Kind() != reflect.Struct {
+			continue
+		}
+		_ = a.getOrBuildMetadata(t)
+	}
 }
 
 // Adapt performs adaptation from src -> dst.
@@ -409,7 +545,7 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 			dstSet[df.name] = true
 		}
 	}
-	if srcMeta.additionalDataField != nil {
+	if srcMeta.additionalDataField != nil && !a.options.DisableUnmarshalAdditionalData {
 		srcAD := srcVal.FieldByIndex(srcMeta.additionalDataField.index)
 		if err := a.unmarshalAdditionalData(dstVal, dstMeta, srcAD, dstSet); err != nil {
 			return fmt.Errorf("unmarshaling AdditionalData: %w", err)
@@ -418,7 +554,7 @@ func (a *Adapter) adaptStruct(dstVal, srcVal reflect.Value) error {
 			processed["AdditionalData"] = true
 		}
 	}
-	if dstMeta.additionalDataField != nil {
+	if dstMeta.additionalDataField != nil && !a.options.DisableMarshalAdditionalData {
 		dstAD := dstVal.FieldByIndex(dstMeta.additionalDataField.index)
 		if err := a.marshalRemainingFields(dstAD, srcVal, st, processed); err != nil {
 			return fmt.Errorf("marshaling remaining fields to AdditionalData: %w", err)
@@ -432,50 +568,50 @@ func (a *Adapter) adaptField(dstField, srcField reflect.Value, fieldName string,
 		return fmt.Errorf("cannot set field %s (unexported or unsettable)", fieldName)
 	}
 	reg := a.converters.Load().(*converterRegistry)
-	// precedence pair > dst > global
+	// precedence pair > dst > global for converters
 	if fn := reg.byPair[[2]reflect.Type{srcRoot, dstRoot}][fieldName]; fn != nil {
-		return a.applyConverter(dstField, fn, srcField, fieldName)
+		if err := a.applyConverter(dstField, fn, srcField, fieldName); err != nil {
+			return err
+		}
+		return a.runValidators(dstField, fieldName, srcRoot, dstRoot)
 	}
 	if fn := reg.byDst[dstRoot][fieldName]; fn != nil {
-		return a.applyConverter(dstField, fn, srcField, fieldName)
+		if err := a.applyConverter(dstField, fn, srcField, fieldName); err != nil {
+			return err
+		}
+		return a.runValidators(dstField, fieldName, srcRoot, dstRoot)
 	}
 	if fn := reg.global[fieldName]; fn != nil {
-		return a.applyConverter(dstField, fn, srcField, fieldName)
+		if err := a.applyConverter(dstField, fn, srcField, fieldName); err != nil {
+			return err
+		}
+		return a.runValidators(dstField, fieldName, srcRoot, dstRoot)
 	}
+	// direct copy logic
 	srcType := srcField.Type()
 	dstType := dstField.Type()
-	if srcType == dstType {
+	if srcType == dstType || srcType.AssignableTo(dstType) {
 		dstField.Set(srcField)
-		return nil
-	}
-	if srcType.AssignableTo(dstType) {
-		dstField.Set(srcField)
-		return nil
+		return a.runValidators(dstField, fieldName, srcRoot, dstRoot)
 	}
 	if srcType.ConvertibleTo(dstType) {
 		dstField.Set(srcField.Convert(dstType))
-		return nil
+		return a.runValidators(dstField, fieldName, srcRoot, dstRoot)
 	}
 	return nil
 }
 
-func (a *Adapter) applyConverter(dstField reflect.Value, fn ConverterFunc, srcField reflect.Value, fieldName string) error {
-	converted, err := fn(srcField.Interface())
-	if err != nil {
-		return err
+func (a *Adapter) runValidators(dstField reflect.Value, fieldName string, srcRoot, dstRoot reflect.Type) error {
+	vreg := a.validators.Load().(*validatorRegistry)
+	if fn := vreg.byPair[[2]reflect.Type{srcRoot, dstRoot}][fieldName]; fn != nil {
+		return fn(dstField.Interface())
 	}
-	if converted == nil {
-		dstField.Set(reflect.Zero(dstField.Type()))
-		return nil
+	if fn := vreg.byDst[dstRoot][fieldName]; fn != nil {
+		return fn(dstField.Interface())
 	}
-	cv := reflect.ValueOf(converted)
-	if !cv.IsValid() {
-		return fmt.Errorf("converter returned invalid value for field %s", fieldName)
+	if fn := vreg.global[fieldName]; fn != nil {
+		return fn(dstField.Interface())
 	}
-	if !cv.Type().AssignableTo(dstField.Type()) {
-		return fmt.Errorf("converter returned type %s, expected %s", cv.Type(), dstField.Type())
-	}
-	dstField.Set(cv)
 	return nil
 }
 
@@ -546,6 +682,9 @@ func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, dstMeta *structM
 					cv := reflect.ValueOf(converted)
 					if cv.IsValid() && cv.Type().AssignableTo(dstField.Type()) {
 						dstField.Set(cv)
+						if err := a.runValidators(dstField, fi.name, reflect.TypeOf(struct{}{}), dstVal.Type()); err != nil {
+							return err
+						}
 						dstFieldsSet[canon] = true
 					}
 				}
@@ -558,6 +697,9 @@ func (a *Adapter) unmarshalAdditionalData(dstVal reflect.Value, dstMeta *structM
 			continue
 		}
 		dstField.Set(ptr.Elem())
+		if err := a.runValidators(dstField, fi.name, reflect.TypeOf(struct{}{}), dstVal.Type()); err != nil {
+			return err
+		}
 		dstFieldsSet[canon] = true
 	}
 	return nil
@@ -601,5 +743,25 @@ func (a *Adapter) marshalRemainingFields(dstAdditionalData reflect.Value, srcVal
 			dstAdditionalData.Set(reflect.ValueOf(boilertypes.JSON(bytes)))
 		}
 	}
+	return nil
+}
+
+func (a *Adapter) applyConverter(dstField reflect.Value, fn ConverterFunc, srcField reflect.Value, fieldName string) error {
+	converted, err := fn(srcField.Interface())
+	if err != nil {
+		return err
+	}
+	if converted == nil {
+		dstField.Set(reflect.Zero(dstField.Type()))
+		return nil
+	}
+	cv := reflect.ValueOf(converted)
+	if !cv.IsValid() {
+		return fmt.Errorf("converter returned invalid value for field %s", fieldName)
+	}
+	if !cv.Type().AssignableTo(dstField.Type()) {
+		return fmt.Errorf("converter returned type %s, expected %s", cv.Type(), dstField.Type())
+	}
+	dstField.Set(cv)
 	return nil
 }
