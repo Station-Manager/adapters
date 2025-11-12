@@ -54,19 +54,77 @@ See `PROFILING.md` for profiling commands and tuning notes.
 ## Quick Start
 
 ```go
-// Basic usage
-adapter := adapters.New()
-err := adapter.Into(&dst, &src)
+package main
+
+import (
+    "fmt"
+    "github.com/Station-Manager/adapters"
+)
+
+// Basic usage: destination-first Into(dst, src)
+type ExampleSrc struct{ Name string }
+type ExampleDst struct{ Name string }
+
+func main() {
+    adapter := adapters.New()
+    src := ExampleSrc{Name: "Alice"}
+    var dst ExampleDst
+    if err := adapter.Into(&dst, &src); err != nil {
+        panic(err)
+    }
+    fmt.Println(dst.Name)
+}
 ```
 
 ### Generics helpers
 
 ```go
-// Allocate and adapt in one step
-out, err := adapter.AdaptTo[Dest](&src)
-// or
-var d Dest
-_ = adapter.Copy(&d, &src)
+package main
+
+import (
+    "fmt"
+    "github.com/Station-Manager/adapters"
+)
+
+// Examples showing package-level generic helpers: AdaptTo, Copy, Make
+type Src struct{ Name string }
+type Dest struct{ Name string }
+
+func exampleAdaptTo() {
+    a := adapters.New()
+    s := Src{Name: "Bob"}
+    out, err := adapters.AdaptTo[Dest](a, &s)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println("AdaptTo ->", out.Name)
+}
+
+func exampleCopy() {
+    a := adapters.New()
+    s := Src{Name: "Claire"}
+    var d Dest
+    if err := adapters.Copy[Dest](a, &d, &s); err != nil {
+        panic(err)
+    }
+    fmt.Println("Copy ->", d.Name)
+}
+
+func exampleMake() {
+    a := adapters.New()
+    s := Src{Name: "Dan"}
+    v, err := adapters.Make[Dest](a, &s)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println("Make ->", v.Name)
+}
+
+func main() {
+    exampleAdaptTo()
+    exampleCopy()
+    exampleMake()
+}
 ```
 
 ### Batch registration
