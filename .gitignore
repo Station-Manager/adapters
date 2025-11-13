@@ -1,3 +1,4 @@
 copilot.*
 *.prof
 coverage.*
+adapters.test

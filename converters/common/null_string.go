@@ -7,7 +7,7 @@ import (
 
 // TypeToModelStringConverter converts a string to a model null.String.
 func TypeToModelStringConverter(src any) (any, error) {
-	const op errors.Op = "converters.common.TypeToModelCountryConverter"
+	const op errors.Op = "converters.common.TypeToModelStringConverter"
 	srcVal, ok := src.(string)
 	if !ok {
 		return null.String{}, errors.New(op).Errorf("Given parameter not a string, got %T", src)
@@ -19,9 +19,9 @@ func TypeToModelStringConverter(src any) (any, error) {
 	return null.StringFrom(srcVal), nil
 }
 
-// ModelToTypeStringConverter converts a model null.String or plain string to a string.
+// ModelToTypeStringConverter converts a model null.String to a string.
 func ModelToTypeStringConverter(src any) (any, error) {
-	const op errors.Op = "converters.common.ModelToTypeCountryConverter"
+	const op errors.Op = "converters.common.ModelToTypeStringConverter"
 
 	// Handle null.String type
 	if nullStr, ok := src.(null.String); ok {
