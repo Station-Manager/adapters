@@ -14,7 +14,7 @@ func TypeToModelStringConverter(src any) (any, error) {
 	}
 	// Treat empty string as null (same behavior) but do not error
 	if srcVal == "" {
-		return null.StringFrom(""), nil
+		return null.String{}, nil
 	}
 	return null.StringFrom(srcVal), nil
 }
