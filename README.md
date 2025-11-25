@@ -1,4 +1,4 @@
-# Adapters Package
+# Station Manager: adapter package
 
 A high-performance, thread-safe Go library for struct-to-struct field adaptation with intelligent handling of `AdditionalData` fields, pluggable converters, and validation hooks.
 
