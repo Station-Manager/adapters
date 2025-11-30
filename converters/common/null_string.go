@@ -12,10 +12,12 @@ func TypeToModelStringConverter(src any) (any, error) {
 	if !ok {
 		return null.String{}, errors.New(op).Errorf("Given parameter not a string, got %T", src)
 	}
-	// Treat empty string as null (same behavior) but do not error
-	if srcVal == "" {
-		return null.String{}, nil
-	}
+	// Treat empty string as null
+	//if srcVal == "" {
+	//	return null.String{
+	//		Valid: true,
+	//	}, nil
+	//}
 	return null.StringFrom(srcVal), nil
 }
 
