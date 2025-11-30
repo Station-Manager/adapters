@@ -13,11 +13,9 @@ func TypeToModelStringConverter(src any) (any, error) {
 		return null.String{}, errors.New(op).Errorf("Given parameter not a string, got %T", src)
 	}
 	// Treat empty string as null
-	//if srcVal == "" {
-	//	return null.String{
-	//		Valid: true,
-	//	}, nil
-	//}
+	if srcVal == "" {
+		return null.String{}, nil
+	}
 	return null.StringFrom(srcVal), nil
 }
 

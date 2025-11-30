@@ -12,7 +12,6 @@ tasks:
     desc: "Development build of the {{.MODULE_NAME}} module"
     cmds:
       - echo "Building {{.MODULE_NAME}} module..."
-      - go mod download
       - go get -u
       - go mod tidy
       - go mod verify
