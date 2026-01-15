@@ -7,7 +7,7 @@ require (
 	github.com/Station-Manager/errors v0.0.4
 	github.com/Station-Manager/types v0.0.14
 	github.com/aarondl/null/v8 v8.1.3
-	github.com/aarondl/sqlboiler/v4 v4.19.5
+	github.com/aarondl/sqlboiler/v4 v4.19.7
 	github.com/goccy/go-json v0.10.5
 	github.com/stretchr/testify v1.11.1
 )
